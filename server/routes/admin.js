@@ -1,0 +1,820 @@
+const express = require('express');
+const bcrypt = require('bcryptjs');
+const rateLimit = require('express-rate-limit');
+const prisma = require('../prisma/db');
+const { requireAuth } = require('../middleware/auth');
+const { requireAdmin, requireMember } = require('../middleware/roles');
+const crypto = require('crypto');
+const { v4: uuidv4 } = require('uuid');
+const upload = require('../middleware/upload');
+const { uploadImage } = require('../services/cloudinaryUpload');
+const { sendInvitation, sendBulkEmail, sendEventReminder, memberEmails } = require('../services/email');
+const { sendPushToAllMembers, isPushEnabled } = require('../services/push');
+const xss = require('xss');
+const logger = require('../utils/logger');
+
+const SALT_ROUNDS = 10;
+
+const adminActionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: 30,
+  message: { error: 'Trop de requêtes, réessayez plus tard' }
+});
+
+const emailLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5,
+  message: { error: 'Limite d\'envoi atteinte, réessayez plus tard' }
+});
+
+const router = express.Router();
+
+// GET /api/admin/dashboard
+router.get('/dashboard', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const [
+      activeMembers,
+      suspendedMembers,
+      totalUsers,
+      upcomingEvents,
+      recentPosts,
+      activeDemands,
+      recentUsers
+    ] = await Promise.all([
+      prisma.user.count({ where: { status: 'active', role: { not: 'visitor' } } }),
+      prisma.user.count({ where: { status: 'suspended' } }),
+      prisma.user.count(),
+      prisma.event.findMany({
+        where: { date: { gte: new Date() } },
+        orderBy: { date: 'asc' },
+        take: 5
+      }),
+      prisma.post.findMany({
+        select: {
+          id: true,
+          content: true,
+          createdAt: true,
+          author: { select: { email: true, member: { select: { companyName: true } } } },
+          _count: { select: { comments: true, likes: true } }
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 5
+      }),
+      prisma.post.count({ where: { type: 'demande' } }),
+      prisma.user.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        select: { id: true, email: true, role: true, createdAt: true }
+      })
+    ]);
+
+    res.set('Cache-Control', 'private, max-age=30');
+    res.json({
+      stats: { activeMembers, suspendedMembers, totalUsers, activeDemands },
+      upcomingEvents,
+      recentPosts,
+      recentUsers
+    });
+  } catch (err) {
+    logger.error('Erreur dashboard', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// GET /api/admin/members/export — export TXT list of all members
+router.get('/members/export', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: { role: { not: 'visitor' } },
+      include: { member: true },
+      orderBy: { createdAt: 'asc' }
+    });
+
+    const lines = [];
+    lines.push('LISTE DES MEMBRES — Velay Semène Business Club');
+    lines.push(`Exportée le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`);
+    lines.push(`Total : ${users.length} membre${users.length > 1 ? 's' : ''}`);
+    lines.push('');
+    lines.push('─'.repeat(50));
+    lines.push('');
+
+    users.forEach((u, i) => {
+      const m = u.member;
+      lines.push(`${i + 1}. ${m?.companyName || '(sans nom)'}`);
+      const person = [m?.firstName, m?.lastName].filter(Boolean).join(' ');
+      if (person) lines.push(`   Contact : ${person}`);
+      if (m?.jobTitle) lines.push(`   Fonction : ${m.jobTitle}`);
+      lines.push(`   Email : ${u.email}`);
+      if (m?.phone) lines.push(`   Téléphone : ${m.phone}`);
+      if (m?.city) lines.push(`   Ville : ${m.city}`);
+      if (m?.sector) lines.push(`   Secteur : ${m.sector}`);
+      lines.push(`   Statut : ${u.status === 'active' ? 'actif' : 'suspendu'} | Rôle : ${u.role}`);
+      lines.push('');
+    });
+
+    const txt = lines.join('\n');
+    const today = new Date().toISOString().slice(0, 10);
+
+    res.set('Content-Type', 'text/plain; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="membres-vsbc-${today}.txt"`);
+    res.send(txt);
+  } catch (err) {
+    logger.error('Erreur export members', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// GET /api/admin/members
+router.get('/members', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+    const skip = (page - 1) * limit;
+
+    const users = await prisma.user.findMany({
+      include: { member: true },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      skip
+    });
+
+    const safeUsers = users.map(({ magicToken, magicTokenExpires, passwordHash, ...u }) => u);
+    res.json(safeUsers);
+  } catch (err) {
+    logger.error('Erreur admin members', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PUT /api/admin/members/:id/role
+router.put('/members/:id/role', requireAuth, requireAdmin, adminActionLimiter, async (req, res) => {
+  try {
+    const { role } = req.body;
+    if (!['visitor', 'member', 'moderator', 'admin'].includes(role)) {
+      return res.status(400).json({ error: 'Rôle invalide' });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: req.params.id },
+      data: { role }
+    });
+
+    res.json({ id: user.id, role: user.role });
+  } catch (err) {
+    logger.error('Erreur update role', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PUT /api/admin/members/:id/status
+router.put('/members/:id/status', requireAuth, requireAdmin, adminActionLimiter, async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!['active', 'suspended'].includes(status)) {
+      return res.status(400).json({ error: 'Statut invalide' });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: req.params.id },
+      data: { status }
+    });
+
+    res.json({ id: user.id, status: user.status });
+  } catch (err) {
+    logger.error('Erreur update status', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// DELETE /api/admin/members/:id
+router.delete('/members/:id', requireAuth, requireAdmin, adminActionLimiter, async (req, res) => {
+  try {
+    if (req.params.id === req.user.id) {
+      return res.status(400).json({ error: 'Impossible de supprimer votre propre compte' });
+    }
+    const uid = req.params.id;
+    // Nettoyer les données liées avant suppression
+    await prisma.$transaction([
+      prisma.session.deleteMany({ where: { userId: uid } }),
+      prisma.event.updateMany({ where: { createdBy: uid }, data: { createdBy: null } }),
+      prisma.favorite.deleteMany({ where: { OR: [{ userId: uid }, { memberId: uid }] } }),
+      prisma.user.delete({ where: { id: uid } })
+    ]);
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Erreur delete member', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// GET /api/admin/settings
+router.get('/settings', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    let settings = await prisma.clubSettings.findUnique({ where: { id: 1 } });
+    if (!settings) {
+      settings = await prisma.clubSettings.create({ data: { id: 1 } });
+    }
+    res.json(settings);
+  } catch (err) {
+    logger.error('Erreur get settings', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PUT /api/admin/settings
+router.put('/settings', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { name, description, contactEmail, contactPhone, address } = req.body;
+    const data = {};
+    if (name) data.name = xss(name);
+    if (description !== undefined) data.description = xss(description);
+    if (contactEmail !== undefined) data.contactEmail = contactEmail;
+    if (contactPhone !== undefined) data.contactPhone = contactPhone;
+    if (address !== undefined) data.address = xss(address);
+    if (req.body.publicAgenda !== undefined) data.publicAgenda = !!req.body.publicAgenda;
+
+    if (req.body.eventRemindersEnabled !== undefined) {
+      data.eventRemindersEnabled = !!req.body.eventRemindersEnabled;
+    }
+    if (Array.isArray(req.body.reminderDaysBefore)) {
+      const days = req.body.reminderDaysBefore
+        .map(n => parseInt(n))
+        .filter(n => Number.isInteger(n) && n >= 1 && n <= 60);
+      data.reminderDaysBefore = [...new Set(days)].sort((a, b) => b - a);
+    }
+    if (req.body.reminderMessage !== undefined) {
+      data.reminderMessage = req.body.reminderMessage
+        ? xss(String(req.body.reminderMessage)).slice(0, 1000)
+        : null;
+    }
+    if (req.body.pushRemindersEnabled !== undefined) data.pushRemindersEnabled = !!req.body.pushRemindersEnabled;
+    if (req.body.pushNewEventEnabled !== undefined) data.pushNewEventEnabled = !!req.body.pushNewEventEnabled;
+
+    const settings = await prisma.clubSettings.upsert({
+      where: { id: 1 },
+      update: data,
+      create: { id: 1, ...data }
+    });
+
+    res.json(settings);
+  } catch (err) {
+    logger.error('Erreur update settings', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/admin/settings/logo
+router.post('/settings/logo', requireAuth, requireAdmin, upload.single('logo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Fichier requis' });
+
+    const logoUrl = await uploadImage(req.file.path);
+
+    await prisma.clubSettings.upsert({
+      where: { id: 1 },
+      update: { logoUrl },
+      create: { id: 1, logoUrl }
+    });
+
+    res.json({ logoUrl });
+  } catch (err) {
+    logger.error('Erreur upload logo', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PUT /api/admin/members/:id/password — Reset password
+router.put('/members/:id/password', requireAuth, requireAdmin, adminActionLimiter, async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password || password.length < 8) {
+      return res.status(400).json({ error: 'Le mot de passe doit contenir au moins 8 caractères' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+    await prisma.user.update({
+      where: { id: req.params.id },
+      data: { passwordHash }
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Erreur reset password', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PUT /api/admin/members/:id/profile — Edit member profile
+router.put('/members/:id/profile', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { firstName, lastName, companyName, jobTitle, phone, address, city, sector, website, description, lookingFor, canOffer } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { id: req.params.id }, include: { member: true } });
+    if (!user) return res.status(404).json({ error: 'Utilisateur introuvable' });
+
+    const data = {};
+    if (firstName !== undefined) data.firstName = xss(String(firstName || '').trim().replace(/\s+/g, ' ').slice(0, 80)) || null;
+    if (lastName !== undefined) data.lastName = xss(String(lastName || '').trim().replace(/\s+/g, ' ').slice(0, 80)) || null;
+    if (companyName !== undefined) data.companyName = xss(companyName);
+    if (jobTitle !== undefined) data.jobTitle = xss(jobTitle);
+    if (phone !== undefined) data.phone = phone;
+    if (address !== undefined) data.address = xss(address);
+    if (city !== undefined) data.city = xss(city);
+    if (sector !== undefined) data.sector = sector ? xss(String(sector).trim().replace(/\s+/g, ' ')) || null : null;
+    if (website !== undefined) data.website = website;
+    if (description !== undefined) data.description = xss(description);
+    if (lookingFor !== undefined) data.lookingFor = xss(lookingFor);
+    if (canOffer !== undefined) data.canOffer = xss(canOffer);
+
+    if (req.body.visibility) {
+      const vis = req.body.visibility;
+      if (typeof vis === 'object' && !Array.isArray(vis)) {
+        data.visibility = vis;
+      }
+    }
+
+    const member = await prisma.member.upsert({
+      where: { id: req.params.id },
+      update: data,
+      create: {
+        id: req.params.id,
+        companyName: data.companyName || '',
+        jobTitle: data.jobTitle || '',
+        phone: data.phone || '',
+        address: data.address || '',
+        ...data
+      }
+    });
+
+    res.json(member);
+  } catch (err) {
+    logger.error('Erreur edit profile', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/admin/invite — Invite a new member by email
+// Accessible aux admins ET aux membres. L'invité est créé avec le rôle "member"
+// et reçoit un magic link qui le connecte directement.
+router.post('/invite', requireAuth, requireMember, emailLimiter, async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email requis' });
+
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      return res.status(400).json({ error: "Format d'email invalide" });
+    }
+
+    // Créer ou promouvoir l'utilisateur en tant que membre
+    const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+    let user;
+    if (existing) {
+      // Promouvoir en member si encore visitor, sinon laisser tel quel
+      user = existing.role === 'visitor'
+        ? await prisma.user.update({
+            where: { id: existing.id },
+            data: { role: 'member', invitedBy: req.user.id }
+          })
+        : existing;
+    } else {
+      user = await prisma.user.create({
+        data: {
+          email: normalizedEmail,
+          role: 'member',
+          invitedBy: req.user.id
+        }
+      });
+    }
+
+    // Générer un magic token pour que le lien connecte directement
+    const rawToken = uuidv4();
+    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        magicToken: hashedToken,
+        magicTokenExpires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 jours
+      }
+    });
+
+    const inviterName = req.user.member?.companyName || req.user.email;
+    const result = await sendInvitation(normalizedEmail, inviterName, rawToken);
+
+    if (!result.ok) {
+      return res.status(500).json({ error: result.error || "Impossible d'envoyer l'email." });
+    }
+    res.json({ success: true, message: 'Invitation envoyée.' });
+  } catch (err) {
+    logger.error('Erreur invite', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/admin/notify — Send email to all active members
+router.post('/notify', requireAuth, requireAdmin, emailLimiter, async (req, res) => {
+  try {
+    const { subject, message } = req.body;
+    if (!subject || !message) {
+      return res.status(400).json({ error: 'Sujet et message requis.' });
+    }
+
+    const members = await prisma.user.findMany({
+      where: { status: 'active', role: { not: 'visitor' } },
+      select: { email: true, secondaryEmails: true }
+    });
+
+    // Une entrée par membre : toutes ses adresses (principale + secondaires) dans le même mail
+    const emails = members.map(m => memberEmails(m));
+    if (emails.length === 0) {
+      return res.json({ sent: 0, message: 'Aucun membre actif trouvé.' });
+    }
+
+    const htmlContent = `
+      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px;">
+        <h2 style="color:#E8731E;">Velay Semène Business Club</h2>
+        <h3>${xss(subject)}</h3>
+        <div>${xss(message).replace(/\n/g, '<br>')}</div>
+        <hr style="margin:24px 0;border:none;border-top:1px solid #eee;">
+        <p style="color:#6B7280;font-size:12px;">Vous recevez cet email en tant que membre du Velay Semène Business Club.</p>
+      </div>
+    `;
+
+    // Instead of sequential for loop, use batched Promise.allSettled
+    const batchSize = 10;
+    let sent = 0;
+    for (let i = 0; i < emails.length; i += batchSize) {
+      const batch = emails.slice(i, i + batchSize);
+      const results = await Promise.allSettled(
+        batch.map(email => sendBulkEmail([email], subject, htmlContent))
+      );
+      sent += results.filter(r => r.status === 'fulfilled' && r.value >= 1).length;
+    }
+    res.json({ sent, total: emails.length, message: `Email envoyé à ${sent}/${emails.length} membres.` });
+
+    // Même message en notification push sur les appareils abonnés
+    sendPushToAllMembers({ title: subject, body: String(message).slice(0, 180), url: '/', tag: 'admin-notify' })
+      .catch(err => logger.warn('Push notify impossible', { error: err.message }));
+  } catch (err) {
+    logger.error('Erreur notify', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// GET /api/admin/push/stats — état des notifications push (appareils abonnés par membre)
+router.get('/push/stats', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const subs = await prisma.pushSubscription.findMany({
+      select: { userId: true, createdAt: true, userAgent: true, user: { select: { email: true, member: { select: { companyName: true } } } } },
+      orderBy: { createdAt: 'desc' }
+    });
+    const byUser = new Map();
+    for (const s of subs) {
+      const entry = byUser.get(s.userId) || { userId: s.userId, name: s.user?.member?.companyName || s.user?.email, devices: 0, lastAt: s.createdAt };
+      entry.devices++;
+      if (s.createdAt > entry.lastAt) entry.lastAt = s.createdAt;
+      byUser.set(s.userId, entry);
+    }
+    const eligible = await prisma.user.count({ where: { status: 'active', role: { not: 'visitor' } } });
+    res.json({
+      enabled: isPushEnabled(),
+      devices: subs.length,
+      members: byUser.size,
+      eligibleMembers: eligible,
+      subscribers: [...byUser.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'))
+    });
+  } catch (err) {
+    logger.error('Erreur push stats', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/admin/push/send — envoie une notification push à tous les membres abonnés
+router.post('/push/send', requireAuth, requireAdmin, adminActionLimiter, async (req, res) => {
+  try {
+    const title = String(req.body?.title || '').trim().slice(0, 80);
+    const body = String(req.body?.body || '').trim().slice(0, 200);
+    let url = String(req.body?.url || '/').trim();
+    if (!title || !body) return res.status(400).json({ error: 'Titre et message requis.' });
+    if (!url.startsWith('/')) {
+      try {
+        const parsed = new URL(url);
+        url = parsed.origin === (process.env.APP_URL || '') ? parsed.pathname + parsed.search : '/';
+      } catch { url = '/'; }
+    }
+    if (!isPushEnabled()) return res.status(503).json({ error: 'Notifications push non configurées sur le serveur.' });
+    const result = await sendPushToAllMembers({ title, body, url, tag: `admin-${Date.now()}` });
+    res.json({ ...result, message: `Notification envoyée à ${result.sent} appareil(s).` });
+  } catch (err) {
+    logger.error('Erreur push send', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/admin/reminder-test — Envoie un email de rappel de démo à l'admin (ou à l'email fourni)
+router.post('/reminder-test', requireAuth, requireAdmin, emailLimiter, async (req, res) => {
+  try {
+    const rawEmail = req.body.email || req.user.email || '';
+    const email = String(rawEmail).toLowerCase().trim();
+    const daysBefore = Math.min(Math.max(parseInt(req.body.daysBefore, 10) || 10, 1), 60);
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Email invalide.' });
+    }
+
+    // Événement fictif pour la démo — aucune trace en base, aucun impact sur les rappels réels
+    const targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() + daysBefore);
+    const demoEvent = {
+      id: 'demo',
+      title: 'Afterwork de démonstration',
+      date: targetDate,
+      timeStart: '18:30',
+      timeEnd: '20:30',
+      location: 'Velay Semène'
+    };
+
+    const settings = await prisma.clubSettings.findUnique({ where: { id: 1 } });
+    const customMessage = settings?.reminderMessage || null;
+
+    const result = await sendEventReminder(email, {
+      event: demoEvent,
+      daysBefore,
+      customMessage,
+      userId: req.user.id
+    });
+
+    if (!result.ok) {
+      return res.status(500).json({ error: result.error || 'Erreur lors de l\'envoi.' });
+    }
+    res.json({ ok: true, email, daysBefore });
+  } catch (err) {
+    logger.error('Erreur reminder-test', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/admin/members/:id/merge — Fusionner un autre compte dans celui-ci
+router.post('/members/:id/merge', requireAuth, requireAdmin, adminActionLimiter, async (req, res) => {
+  try {
+    const primaryId = req.params.id;
+    const { mergeEmail } = req.body;
+    if (!mergeEmail) return res.status(400).json({ error: 'Email du compte à fusionner requis.' });
+
+    const normalizedEmail = String(mergeEmail).toLowerCase().trim();
+    const secondary = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      include: { member: true }
+    });
+    if (!secondary) return res.status(404).json({ error: 'Aucun compte trouvé avec cet email.' });
+    if (secondary.id === primaryId) return res.status(400).json({ error: 'Impossible de fusionner un compte avec lui-même.' });
+
+    const primary = await prisma.user.findUnique({
+      where: { id: primaryId },
+      include: { member: true }
+    });
+    if (!primary) return res.status(404).json({ error: 'Compte principal introuvable.' });
+
+    await prisma.$transaction(async (tx) => {
+      // RSVPs : transférer ceux qui n'existent pas déjà
+      const primaryRsvps = await tx.rsvp.findMany({ where: { userId: primaryId }, select: { eventId: true } });
+      const primaryEventIds = new Set(primaryRsvps.map(r => r.eventId));
+      await tx.rsvp.updateMany({
+        where: { userId: secondary.id, eventId: { notIn: [...primaryEventIds] } },
+        data: { userId: primaryId }
+      });
+      await tx.rsvp.deleteMany({ where: { userId: secondary.id } });
+
+      // Posts
+      await tx.post.updateMany({ where: { authorId: secondary.id }, data: { authorId: primaryId } });
+
+      // Comments
+      await tx.comment.updateMany({ where: { authorId: secondary.id }, data: { authorId: primaryId } });
+
+      // Likes : transférer ceux qui n'existent pas déjà
+      const primaryLikes = await tx.like.findMany({ where: { userId: primaryId }, select: { postId: true } });
+      const primaryPostIds = new Set(primaryLikes.map(l => l.postId));
+      await tx.like.updateMany({
+        where: { userId: secondary.id, postId: { notIn: [...primaryPostIds] } },
+        data: { userId: primaryId }
+      });
+      await tx.like.deleteMany({ where: { userId: secondary.id } });
+
+      // Favorites (en tant qu'utilisateur)
+      const primaryFavs = await tx.favorite.findMany({ where: { userId: primaryId }, select: { memberId: true } });
+      const primaryFavIds = new Set(primaryFavs.map(f => f.memberId));
+      await tx.favorite.updateMany({
+        where: { userId: secondary.id, memberId: { notIn: [...primaryFavIds] } },
+        data: { userId: primaryId }
+      });
+      await tx.favorite.deleteMany({ where: { userId: secondary.id } });
+
+      // Favorites (en tant que membre favorisé)
+      const favedByPrimary = await tx.favorite.findMany({ where: { memberId: primaryId }, select: { userId: true } });
+      const favedByIds = new Set(favedByPrimary.map(f => f.userId));
+      await tx.favorite.updateMany({
+        where: { memberId: secondary.id, userId: { notIn: [...favedByIds] } },
+        data: { memberId: primaryId }
+      });
+      await tx.favorite.deleteMany({ where: { memberId: secondary.id } });
+
+      // Events créés
+      await tx.event.updateMany({ where: { createdBy: secondary.id }, data: { createdBy: primaryId } });
+
+      // Invités
+      await tx.user.updateMany({ where: { invitedBy: secondary.id }, data: { invitedBy: primaryId } });
+
+      // Profil membre : copier les données du secondaire si le primaire n'a pas de profil
+      if (secondary.member && !primary.member) {
+        const { id, updatedAt, ...memberData } = secondary.member;
+        await tx.member.delete({ where: { id: secondary.id } });
+        await tx.member.create({ data: { id: primaryId, ...memberData } });
+      } else if (secondary.member) {
+        await tx.member.delete({ where: { id: secondary.id } });
+      }
+
+      // Garder l'email du secondaire comme email secondaire du primaire
+      const allSecondaryEmails = [...(primary.secondaryEmails || [])];
+      if (!allSecondaryEmails.includes(secondary.email)) {
+        allSecondaryEmails.push(secondary.email);
+      }
+      for (const e of (secondary.secondaryEmails || [])) {
+        if (!allSecondaryEmails.includes(e)) allSecondaryEmails.push(e);
+      }
+      await tx.user.update({
+        where: { id: primaryId },
+        data: { secondaryEmails: allSecondaryEmails }
+      });
+
+      // Sessions
+      await tx.session.deleteMany({ where: { userId: secondary.id } });
+
+      // Supprimer le compte secondaire
+      await tx.user.delete({ where: { id: secondary.id } });
+    });
+
+    const updated = await prisma.user.findUnique({
+      where: { id: primaryId },
+      include: { member: true }
+    });
+
+    res.json({ success: true, message: `Compte ${normalizedEmail} fusionné avec succès.`, user: updated });
+  } catch (err) {
+    logger.error('Erreur merge', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur lors de la fusion.' });
+  }
+});
+
+// PUT /api/admin/members/:id/emails — Gérer les adresses d'un membre : add, remove, setPrimary, replace
+router.put('/members/:id/emails', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { action, email } = req.body;
+    if (!email || !action) return res.status(400).json({ error: 'Action et email requis.' });
+
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      return res.status(400).json({ error: "Format d'email invalide." });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!user) return res.status(404).json({ error: 'Utilisateur introuvable.' });
+
+    if (action === 'add') {
+      if (normalizedEmail === user.email) {
+        return res.status(400).json({ error: 'Cet email est déjà l\'email principal.' });
+      }
+      const existing = await prisma.user.findFirst({
+        where: {
+          id: { not: user.id },
+          OR: [
+            { email: normalizedEmail },
+            { secondaryEmails: { has: normalizedEmail } }
+          ]
+        }
+      });
+      if (existing) {
+        return res.status(409).json({ error: 'Cet email est déjà utilisé par un autre compte.' });
+      }
+      const emails = [...(user.secondaryEmails || [])];
+      if (!emails.includes(normalizedEmail)) {
+        emails.push(normalizedEmail);
+      }
+      await prisma.user.update({ where: { id: user.id }, data: { secondaryEmails: emails } });
+      return res.json({ email: user.email, secondaryEmails: emails });
+    }
+
+    if (action === 'remove') {
+      if (normalizedEmail === user.email) {
+        return res.status(400).json({ error: 'Impossible de retirer l\'adresse principale : choisissez d\'abord une autre adresse principale.' });
+      }
+      const emails = (user.secondaryEmails || []).filter(e => e !== normalizedEmail);
+      await prisma.user.update({ where: { id: user.id }, data: { secondaryEmails: emails } });
+      return res.json({ email: user.email, secondaryEmails: emails });
+    }
+
+    // Faire d'une adresse secondaire l'adresse principale (l'ancienne principale devient secondaire)
+    if (action === 'setPrimary') {
+      if (normalizedEmail === user.email) return res.json({ email: user.email, secondaryEmails: user.secondaryEmails || [] });
+      if (!(user.secondaryEmails || []).includes(normalizedEmail)) {
+        return res.status(400).json({ error: 'Cette adresse n\'est pas associée à ce compte.' });
+      }
+      const emails = [user.email, ...(user.secondaryEmails || []).filter(e => e !== normalizedEmail)];
+      const updated = await prisma.user.update({
+        where: { id: user.id },
+        data: { email: normalizedEmail, secondaryEmails: emails },
+        select: { email: true, secondaryEmails: true }
+      });
+      logger.info(`[admin] ${req.user.email} : adresse principale de ${user.email} → ${normalizedEmail}`);
+      return res.json(updated);
+    }
+
+    // Corriger une adresse (principale ou secondaire)
+    if (action === 'replace') {
+      const newEmail = String(req.body.newEmail || '').toLowerCase().trim();
+      if (!emailRegex.test(newEmail)) return res.status(400).json({ error: "Format d'email invalide." });
+      if (newEmail === normalizedEmail) return res.json({ email: user.email, secondaryEmails: user.secondaryEmails || [] });
+
+      const isPrimary = normalizedEmail === user.email;
+      if (!isPrimary && !(user.secondaryEmails || []).includes(normalizedEmail)) {
+        return res.status(400).json({ error: 'Cette adresse n\'est pas associée à ce compte.' });
+      }
+      if (newEmail === user.email || (user.secondaryEmails || []).includes(newEmail)) {
+        return res.status(400).json({ error: 'Cette adresse est déjà associée à ce compte.' });
+      }
+      const taken = await prisma.user.findFirst({
+        where: { id: { not: user.id }, OR: [{ email: newEmail }, { secondaryEmails: { has: newEmail } }] }
+      });
+      if (taken) return res.status(409).json({ error: 'Cet email est déjà utilisé par un autre compte.' });
+
+      const data = isPrimary
+        ? { email: newEmail }
+        : { secondaryEmails: (user.secondaryEmails || []).map(e => (e === normalizedEmail ? newEmail : e)) };
+      const updated = await prisma.user.update({ where: { id: user.id }, data, select: { email: true, secondaryEmails: true } });
+      logger.info(`[admin] ${req.user.email} : adresse ${normalizedEmail} → ${newEmail} (compte ${user.id})`);
+      return res.json(updated);
+    }
+
+    res.status(400).json({ error: 'Action invalide.' });
+  } catch (err) {
+    logger.error('Erreur manage emails', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/admin/email-custom — Envoyer un email personnalisé à une liste d'adresses
+router.post('/email-custom', requireAuth, requireAdmin, emailLimiter, async (req, res) => {
+  try {
+    const { emails, subject, message, includeJoinLink } = req.body;
+    if (!emails || !subject || !message) {
+      return res.status(400).json({ error: 'Emails, sujet et message requis.' });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const emailList = String(emails)
+      .split(/[,;\n]+/)
+      .map(e => e.trim().toLowerCase())
+      .filter(e => emailRegex.test(e));
+
+    if (emailList.length === 0) {
+      return res.status(400).json({ error: 'Aucune adresse email valide trouvée.' });
+    }
+
+    const APP_URL = process.env.APP_URL || 'http://localhost:5173';
+    const joinBlock = includeJoinLink
+      ? `<div style="margin:24px 0;text-align:center;">
+           <a href="${APP_URL}/inscription" style="display:inline-block;background:#E8731E;color:#fff;padding:12px 32px;border-radius:8px;text-decoration:none;font-weight:600;">
+             Rejoindre le Velay Semène Business Club
+           </a>
+         </div>`
+      : '';
+
+    const cleanSubject = xss(subject);
+    const cleanMessage = xss(message).replace(/\n/g, '<br>');
+    const htmlContent = `
+      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px;">
+        <h2 style="color:#E8731E;">Velay Semène Business Club</h2>
+        <div>${cleanMessage}</div>
+        ${joinBlock}
+        <hr style="margin:24px 0;border:none;border-top:1px solid #eee;">
+        <p style="color:#6B7280;font-size:12px;">Velay Semène Business Club — Club d'affaires du Velay Semène</p>
+      </div>
+    `;
+
+    let sent = 0;
+    for (const email of emailList) {
+      const result = await sendBulkEmail([email], cleanSubject, htmlContent);
+      if (result >= 1) sent++;
+      await new Promise(r => setTimeout(r, 120));
+    }
+
+    res.json({ sent, total: emailList.length, message: `Email envoyé à ${sent}/${emailList.length} adresse(s).` });
+  } catch (err) {
+    logger.error('Erreur email-custom', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+module.exports = router;

@@ -1,0 +1,160 @@
+export function formatDate(dateStr) {
+  const date = new Date(dateStr);
+  return date.toLocaleDateString('fr-FR', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  });
+}
+
+export function formatShortDate(dateStr) {
+  const date = new Date(dateStr);
+  return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+}
+
+export function formatTime(time) {
+  if (!time) return '';
+  return time.replace(':', 'h');
+}
+
+// Libellé de mois pour regrouper l'agenda : « Octobre 2026 »
+export function formatMonthLabel(dateStr) {
+  const label = new Date(dateStr).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+// Nombre de jours entre aujourd'hui et une date (0 = aujourd'hui, 1 = demain)
+export function daysUntil(dateStr) {
+  const [y, m, d] = String(dateStr).slice(0, 10).split('-').map(Number);
+  const target = new Date(y, m - 1, d);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((target - today) / 86400000);
+}
+
+export function formatDaysUntil(dateStr) {
+  const n = daysUntil(dateStr);
+  if (n < 0) return 'passé';
+  if (n === 0) return "aujourd'hui";
+  if (n === 1) return 'demain';
+  if (n < 7) return `dans ${n} jours`;
+  if (n < 14) return 'dans 1 semaine';
+  if (n < 30) return `dans ${Math.round(n / 7)} semaines`;
+  return `dans ${Math.round(n / 30)} mois`;
+}
+
+export function getEventBadgeClass(type) {
+  const classes = {
+    matinale: 'badge-matinale',
+    afterwork: 'badge-afterwork',
+    formation: 'badge-formation',
+    conference: 'badge-conference',
+    special: 'badge-special'
+  };
+  return classes[type] || 'badge';
+}
+
+export function getEventTypeLabel(type) {
+  const labels = {
+    matinale: 'Matinale',
+    afterwork: 'Afterwork',
+    formation: 'Formation',
+    conference: 'Conférence',
+    special: 'Spécial'
+  };
+  return labels[type] || type;
+}
+
+export function timeAgo(dateStr) {
+  const now = new Date();
+  const date = new Date(dateStr);
+  const diff = Math.floor((now - date) / 1000);
+
+  if (diff < 60) return "à l'instant";
+  if (diff < 3600) return `il y a ${Math.floor(diff / 60)} min`;
+  if (diff < 86400) return `il y a ${Math.floor(diff / 3600)}h`;
+  if (diff < 604800) return `il y a ${Math.floor(diff / 86400)}j`;
+  return formatShortDate(dateStr);
+}
+
+export function whatsappLink(phone) {
+  const cleaned = phone.replace(/[\s.-]/g, '').replace(/^0/, '33');
+  return `https://wa.me/${cleaned}`;
+}
+
+// Miniature d'une image stockée en base (/api/uploads/:id) — largeurs supportées : 200, 400, 800
+export function imgUrl(url, width = 400) {
+  if (!url) return url;
+  if (url.startsWith('/api/uploads/') && !url.includes('?')) return `${url}?w=${width}`;
+  return url;
+}
+
+export function mapsUrl(address) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+}
+
+// La date d'un événement est un jour civil (YYYY-MM-DD) : on la lit telle quelle,
+// sans passer par new Date() qui la décalerait selon le fuseau du téléphone.
+function calendarDay(dateStr) {
+  const iso = String(dateStr).slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso.split('-');
+  const d = new Date(dateStr);
+  return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')];
+}
+
+// Formater une date+heure en format iCal (YYYYMMDDTHHmmSS)
+function toCalDateStr(dateStr, time) {
+  const [year, month, day] = calendarDay(dateStr);
+  const [h, m] = (time || '00:00').split(':');
+  return `${year}${month}${day}T${h.padStart(2, '0')}${m.padStart(2, '0')}00`;
+}
+
+export function googleCalendarUrl(event) {
+  const start = toCalDateStr(event.date, event.timeStart);
+  const end = event.timeEnd
+    ? toCalDateStr(event.date, event.timeEnd)
+    : toCalDateStr(event.date, addHours(event.timeStart, 2));
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: event.title,
+    dates: `${start}/${end}`,
+    location: event.location || '',
+    details: event.description || '',
+    ctz: 'Europe/Paris'
+  });
+  return `https://calendar.google.com/calendar/render?${params}`;
+}
+
+export function outlookCalendarUrl(event) {
+  const start = toISOLocal(event.date, event.timeStart);
+  const end = event.timeEnd
+    ? toISOLocal(event.date, event.timeEnd)
+    : toISOLocal(event.date, addHours(event.timeStart, 2));
+  const params = new URLSearchParams({
+    path: '/calendar/action/compose',
+    rru: 'addevent',
+    subject: event.title,
+    startdt: start,
+    enddt: end,
+    location: event.location || '',
+    body: event.description || ''
+  });
+  return `https://outlook.live.com/calendar/0/action/compose?${params}`;
+}
+
+function toISOLocal(dateStr, time) {
+  const [year, month, day] = calendarDay(dateStr);
+  const [h, m] = (time || '00:00').split(':');
+  const d = new Date(Number(year), Number(month) - 1, Number(day), parseInt(h), parseInt(m), 0, 0);
+  return d.toISOString();
+}
+
+function addHours(time, hours) {
+  const [h, m] = (time || '00:00').split(':').map(Number);
+  const newH = Math.min(h + hours, 23);
+  const newM = newH === 23 && h + hours > 23 ? 59 : m;
+  return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+}
+
+// Prénom + nom d'un membre (vide si non renseignés)
+export function personName(member) {
+  return [member?.firstName, member?.lastName].filter(Boolean).join(' ');
+}

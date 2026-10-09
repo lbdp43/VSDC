@@ -1,0 +1,693 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+    overflow-x: hidden;
+    background: #141416;
+  }
+  body {
+    @apply text-text-main font-sans antialiased;
+    background: transparent;
+    min-height: 100vh;
+  }
+  /* Fond charbon/orange dégradé fixe (pseudo-élément : background-attachment: fixed est ignoré sur iOS) :
+     charbon en haut → braise orange en bas, reflet glossy en diagonale, halos lumineux */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background:
+      /* reflet glossy en diagonale */
+      linear-gradient(112deg, rgba(255, 255, 255, 0) 38%, rgba(255, 255, 255, 0.16) 50%, rgba(255, 255, 255, 0.04) 56%, rgba(255, 255, 255, 0) 64%),
+      /* halo orange en haut à droite */
+      radial-gradient(720px 520px at 100% 0%, rgba(232, 115, 30, 0.42) 0%, rgba(232, 115, 30, 0) 60%),
+      /* lueur chaude en bas à gauche */
+      radial-gradient(900px 700px at 0% 100%, rgba(255, 140, 50, 0.55) 0%, rgba(255, 140, 50, 0) 60%),
+      /* dégradé principal : charbon → braise */
+      linear-gradient(168deg, #121214 0%, #1e1d20 32%, #3a2518 60%, #8a3f14 82%, #d9681c 100%);
+  }
+  h1, h2, h3 {
+    @apply font-display;
+  }
+  button, a, [role="button"], [role="link"] {
+    touch-action: manipulation;
+  }
+  *:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  /* iOS zoome sur les champs < 16px : on force 16px sur mobile */
+  @media (max-width: 640px) {
+    input, select, textarea {
+      font-size: 16px !important;
+    }
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-brand text-white px-6 py-3 rounded-full font-semibold
+           hover:bg-brand-dark transition-colors duration-200
+           active:scale-95 transform disabled:opacity-60 disabled:active:scale-100
+           shadow-md shadow-brand-dark/20;
+  }
+  .btn-secondary {
+    @apply bg-white text-brand border-2 border-brand px-6 py-3 rounded-full
+           font-semibold hover:bg-brand-light transition-colors duration-200 disabled:opacity-60;
+  }
+  .btn-danger {
+    @apply bg-red-500 text-white px-6 py-3 rounded-full font-semibold
+           hover:bg-red-600 transition-colors duration-200;
+  }
+  /* Encart « verre » clair : translucide, reflet spéculaire en haut, liseré lumineux.
+     Pas de flou (le fond est un dégradé lisse, le flou n'apporterait rien et coûte cher sur mobile). */
+  .card {
+    @apply relative rounded-card p-4 text-text-main;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.75) 0%, rgba(255, 255, 255, 0.2) 28%, rgba(255, 255, 255, 0) 55%),
+      linear-gradient(135deg, rgba(255, 255, 255, 0.94) 0%, rgba(250, 243, 236, 0.9) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    box-shadow:
+      0 16px 40px -16px rgba(10, 8, 6, 0.55),
+      0 0 0 1px rgba(255, 255, 255, 0.25),
+      inset 0 1px 0 rgba(255, 255, 255, 1),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.4);
+  }
+  /* Verre « liquide » sombre translucide (iOS) : flou du fond, liseré et reflet */
+  .liquid {
+    position: relative;
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.26) 0%, rgba(255, 255, 255, 0.07) 45%, rgba(255, 255, 255, 0.14) 100%);
+    -webkit-backdrop-filter: blur(22px) saturate(170%);
+    backdrop-filter: blur(22px) saturate(170%);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    box-shadow:
+      0 12px 32px -12px rgba(10, 30, 60, 0.55),
+      inset 0 1px 0 rgba(255, 255, 255, 0.55),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.12);
+  }
+  .card-glass {
+    @apply liquid relative rounded-card p-4 text-white;
+  }
+  .glass-pill {
+    @apply liquid rounded-full text-white;
+  }
+  .input-field {
+    @apply w-full px-4 py-3 rounded-xl border border-gray-200 bg-white text-text-main
+           focus:border-brand focus:ring-2 focus:ring-brand-light outline-none
+           transition-all duration-200;
+  }
+  .contact-pill {
+    @apply inline-flex items-center gap-1.5 h-9 px-3 rounded-full text-sm font-medium
+           border border-gray-200 text-text-muted bg-white
+           hover:border-brand hover:text-brand transition-colors;
+  }
+  .contact-pill-primary {
+    @apply bg-brand border-brand text-white hover:bg-brand-dark hover:border-brand-dark hover:text-white;
+  }
+  .page-title {
+    @apply font-display text-2xl sm:text-3xl text-white;
+  }
+  /* Textes posés directement sur le fond sombre */
+  .on-bg {
+    @apply text-white;
+  }
+  .on-bg-muted {
+    color: rgba(255, 255, 255, 0.82);
+    text-shadow: 0 1px 2px rgba(10, 30, 60, 0.25);
+  }
+  .page-title, .on-bg {
+    text-shadow: 0 1px 3px rgba(10, 30, 60, 0.3);
+  }
+  .on-bg-link {
+    @apply text-white/90 hover:text-white underline-offset-2 hover:underline;
+  }
+  /* Puces de filtre sur le fond sombre (verre) */
+  .chip {
+    @apply liquid px-3 py-1.5 rounded-full text-xs sm:text-sm whitespace-nowrap transition-colors text-white;
+  }
+  .chip-active {
+    @apply bg-white text-brand-dark shadow-md shadow-brand-dark/30;
+    background: #fff;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  /* Onglets segmentés sur le fond sombre, avec pilule blanche qui glisse */
+  .segment {
+    @apply liquid flex gap-1 rounded-full p-1;
+  }
+  .segment-indicator,
+  .segment > .segment-indicator {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 4px;
+    width: calc(50% - 6px);
+    border-radius: 9999px;
+    background: #fff;
+    box-shadow: 0 4px 12px -4px rgba(10, 30, 60, 0.5);
+    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+    z-index: 1;
+  }
+  .segment > .segment-indicator-2 {
+    transform: translateX(calc(100% + 4px));
+  }
+  .segment > .segment-item {
+    @apply flex-1 py-2 px-3 sm:px-4 rounded-full text-sm font-medium text-white/85;
+    position: relative;
+    z-index: 2;
+    background: transparent;
+    transition: color 0.25s ease, transform 0.18s;
+  }
+  .segment > .segment-item-on {
+    @apply text-brand-dark font-semibold;
+  }
+  .segment-item-active {
+    @apply bg-white text-brand-dark shadow-sm;
+  }
+  /* Squelette de chargement sur le fond sombre */
+  .skeleton {
+    @apply rounded-card animate-pulse bg-white/25 border border-white/30;
+  }
+  /* Rangée de puces défilante : pas de barre grise, glissement fluide, débordement jusqu'aux bords */
+  .chips-row {
+    @apply flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 no-scrollbar;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  .chips-row > * {
+    scroll-snap-align: start;
+    flex-shrink: 0;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .badge {
+    @apply inline-block px-3 py-1 rounded-full text-sm font-medium;
+  }
+  .badge-matinale {
+    @apply badge bg-yellow-100 text-yellow-800;
+  }
+  .badge-afterwork {
+    @apply badge bg-purple-100 text-purple-800;
+  }
+  .badge-formation {
+    @apply badge bg-green-100 text-green-800;
+  }
+  .badge-conference {
+    @apply badge bg-brand-light text-brand-dark;
+  }
+  .badge-special {
+    @apply badge bg-red-100 text-red-800;
+  }
+  .badge-demande {
+    @apply badge bg-orange-100 text-orange-800;
+  }
+}
+
+/* Animations */
+.fade-in {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.slide-up {
+  animation: slideUp 0.3s ease-out;
+}
+
+/* Transitions entre pages (sens de la navigation) */
+.page-right { animation: pageFromRight 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+.page-left  { animation: pageFromLeft  0.26s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+.page-fade  { animation: fadeIn 0.2s ease-out backwards; }
+@keyframes pageFromRight {
+  from { opacity: 0; transform: translateX(32px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes pageFromLeft {
+  from { opacity: 0; transform: translateX(-32px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Apparition en cascade des éléments d'une liste */
+.stagger > * {
+  animation: itemIn 0.38s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+.stagger > *:nth-child(1)  { animation-delay: 0.03s; }
+.stagger > *:nth-child(2)  { animation-delay: 0.07s; }
+.stagger > *:nth-child(3)  { animation-delay: 0.11s; }
+.stagger > *:nth-child(4)  { animation-delay: 0.15s; }
+.stagger > *:nth-child(5)  { animation-delay: 0.19s; }
+.stagger > *:nth-child(6)  { animation-delay: 0.23s; }
+.stagger > *:nth-child(7)  { animation-delay: 0.27s; }
+.stagger > *:nth-child(8)  { animation-delay: 0.31s; }
+.stagger > *:nth-child(n+9) { animation-delay: 0.34s; }
+@keyframes itemIn {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Déploiement fluide en hauteur */
+.expand {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 0.32s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.22s ease;
+}
+.expand-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.expand-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+.expand-open > .expand-inner {
+  transition: overflow 0s 0.32s;
+}
+
+/* Retour tactile : léger enfoncement au tap */
+.chip, .glass-pill, .contact-pill, .segment-item, .btn-secondary {
+  transition-property: transform, background-color, color, border-color, box-shadow;
+  transition-duration: 0.18s;
+}
+.chip:active, .glass-pill:active, .contact-pill:active, .segment-item:active, .btn-secondary:active {
+  transform: scale(0.96);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Safe area pour iPhone (barre en bas) */
+.safe-bottom {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+/* Bannière hors-ligne sous l'encoche iPhone */
+.offline-banner {
+  padding-top: calc(0.5rem + env(safe-area-inset-top));
+}
+
+/* Mode hors-ligne */
+.offline-banner {
+  @apply fixed top-0 left-0 right-0 bg-yellow-500 text-white text-center py-2 text-sm font-medium z-50;
+}
+
+/* Barre de navigation / en-tête en verre liquide charbon */
+.glass-bar {
+  position: relative;
+  background: linear-gradient(180deg, rgba(44, 42, 46, 0.7) 0%, rgba(26, 25, 28, 0.78) 100%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%) brightness(1.05);
+  backdrop-filter: blur(28px) saturate(200%) brightness(1.05);
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+/* Verre charbon opaque : lisible quel que soit le fond (bannières, alertes) */
+.glass-dark {
+  position: relative;
+  background: linear-gradient(135deg, rgba(40, 38, 42, 0.95) 0%, rgba(24, 23, 26, 0.97) 100%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow:
+    0 18px 40px -14px rgba(8, 6, 4, 0.75),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+/* Barre du bas flottante en pilule (iOS) */
+/* Barre de navigation sans cadre : les icônes flottent sur un voile charbon flouté
+   qui s'estompe vers le haut (même principe que l'en-tête). */
+.nav-scrim {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding-top: 0.35rem;
+  padding-bottom: calc(0.35rem + env(safe-area-inset-bottom));
+}
+.nav-scrim::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: -3.5rem;
+  pointer-events: none;
+  background: linear-gradient(0deg, rgba(22, 21, 24, 0.94) 0%, rgba(19, 44, 71, 0.8) 40%, rgba(19, 44, 71, 0) 100%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-mask-image: linear-gradient(0deg, #000 0%, #000 55%, rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(0deg, #000 0%, #000 55%, rgba(0, 0, 0, 0) 100%);
+}
+
+/* Liseré réfractif (technique « liquid glass ») : la lumière traverse le bord de la lentille,
+   clair en haut à gauche, sombre au milieu, clair en bas à droite. Masque = anneau de 1,5 px. */
+.liquid::before,
+.card-glass::before,
+.glass-pill::before,
+.segment::before,
+.chip:not(.chip-active)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  pointer-events: none;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(255, 255, 255, 0.35) 22%,
+    rgba(255, 255, 255, 0.04) 45%,
+    rgba(255, 255, 255, 0.04) 58%,
+    rgba(255, 255, 255, 0.55) 100%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+/* Reflet spéculaire : lumière douce qui glisse sur le haut de la surface */
+.liquid::after,
+.card-glass::after,
+.glass-pill::after,
+.segment::after,
+.chip:not(.chip-active)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 70% at 30% -20%, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 60%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0) 45%);
+}
+.nav-scrim > *, .liquid > *, .card-glass > *, .glass-pill > *, .segment > *, .chip > * {
+  position: relative;
+  z-index: 1;
+}
+/* Sur les cartes claires : reflet spéculaire en haut, liseré blanc */
+.card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(110% 60% at 25% -15%, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0) 55%);
+}
+.card > * { position: relative; z-index: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-in, .slide-up, .page-right, .page-left, .page-fade, .stagger > * {
+    animation: none !important;
+  }
+  .expand {
+    transition: none !important;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Animation d'ouverture de l'application */
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: linear-gradient(168deg, #101012 0%, #1e1d20 40%, #4a2a16 75%, #d9681c 100%);
+  pointer-events: none;
+}
+.splash-out {
+  animation: splashOut 0.52s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+.splash-out .splash-stage,
+.splash-out .splash-title,
+.splash-out .splash-sub {
+  animation: splashLift 0.52s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Halos lumineux qui dérivent lentement */
+.splash-halo {
+  position: absolute;
+  width: 70vmax;
+  height: 70vmax;
+  border-radius: 9999px;
+  opacity: 0.6;
+  will-change: transform;
+}
+.splash-halo-a {
+  top: -30vmax;
+  right: -25vmax;
+  background: radial-gradient(circle, rgba(255, 150, 70, 0.85) 0%, rgba(255, 150, 70, 0.35) 25%, rgba(255, 150, 70, 0) 62%);
+  animation: splashDriftA 6s ease-in-out infinite alternate;
+}
+.splash-halo-b {
+  bottom: -35vmax;
+  left: -25vmax;
+  background: radial-gradient(circle, rgba(232, 115, 30, 0.8) 0%, rgba(232, 115, 30, 0.3) 25%, rgba(232, 115, 30, 0) 62%);
+  animation: splashDriftB 7s ease-in-out infinite alternate;
+}
+@keyframes splashDriftA { from { transform: translate(0, 0) scale(1); } to { transform: translate(-8vmax, 6vmax) scale(1.15); } }
+@keyframes splashDriftB { from { transform: translate(0, 0) scale(1.1); } to { transform: translate(7vmax, -6vmax) scale(0.95); } }
+
+/* Bokeh flottant */
+.splash-bokeh {
+  position: absolute;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.08) 60%, rgba(255, 255, 255, 0) 100%);
+  opacity: 0;
+  animation: splashBokeh 3.2s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+.splash-bokeh-1 { width: 18px; height: 18px; left: 14%; top: 28%; animation-delay: 0.2s; }
+.splash-bokeh-2 { width: 10px; height: 10px; left: 78%; top: 22%; animation-delay: 0.9s; }
+.splash-bokeh-3 { width: 26px; height: 26px; left: 84%; top: 62%; animation-delay: 0.5s; }
+.splash-bokeh-4 { width: 8px;  height: 8px;  left: 22%; top: 70%; animation-delay: 1.4s; }
+.splash-bokeh-5 { width: 14px; height: 14px; left: 60%; top: 78%; animation-delay: 0.7s; }
+.splash-bokeh-6 { width: 6px;  height: 6px;  left: 40%; top: 18%; animation-delay: 1.8s; }
+.splash-bokeh-7 { width: 12px; height: 12px; left: 8%;  top: 52%; animation-delay: 1.1s; }
+@keyframes splashBokeh {
+  0%   { opacity: 0;   transform: translateY(12px) scale(0.8); }
+  30%  { opacity: 0.9; }
+  100% { opacity: 0;   transform: translateY(-28px) scale(1.15); }
+}
+
+/* Scène du logo */
+.splash-stage {
+  position: relative;
+  width: 132px;
+  height: 132px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.splash-glow {
+  position: absolute;
+  inset: -40px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(255, 200, 150, 0.5) 0%, rgba(232, 115, 30, 0.3) 35%, rgba(232, 115, 30, 0) 70%);
+  animation: splashGlow 0.9s ease-out 0.15s both, splashBreath 2.4s ease-in-out 1s infinite;
+}
+.splash-orbit {
+  position: absolute;
+  inset: -8px;
+  border-radius: 9999px;
+  background: conic-gradient(from 0deg, rgba(255, 255, 255, 0) 0deg, rgba(255, 255, 255, 0.95) 60deg, rgba(255, 255, 255, 0) 130deg, rgba(255, 255, 255, 0) 360deg);
+  -webkit-mask: radial-gradient(circle, transparent 62%, #000 64%, #000 100%);
+  mask: radial-gradient(circle, transparent 62%, #000 64%, #000 100%);
+  opacity: 0;
+  animation: splashOrbitIn 0.5s ease-out 0.5s both, splashSpin 1.6s linear 0.5s infinite;
+}
+.splash-logo {
+  position: relative;
+  width: 112px;
+  height: 112px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.92) 100%);
+  box-shadow:
+    0 30px 70px -22px rgba(5, 20, 45, 0.85),
+    0 0 0 5px rgba(255, 255, 255, 0.18),
+    0 0 0 10px rgba(255, 255, 255, 0.07),
+    inset 0 -6px 14px rgba(200, 120, 60, 0.28),
+    inset 0 2px 0 rgba(255, 255, 255, 1);
+  animation: splashLogo 1s cubic-bezier(0.2, 0.9, 0.25, 1.3) both;
+}
+.splash-shine {
+  position: absolute;
+  top: -20%;
+  left: -70%;
+  width: 40%;
+  height: 140%;
+  transform: skewX(-24deg);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 225, 200, 0.95) 50%, rgba(255, 255, 255, 0) 100%);
+  animation: splashShine 0.75s ease-in-out 0.7s both, splashShine 0.75s ease-in-out 1.9s both;
+}
+.splash-ring {
+  position: absolute;
+  width: 112px;
+  height: 112px;
+  border-radius: 9999px;
+  border: 1.5px solid rgba(255, 255, 255, 0.6);
+  animation: splashRing 2.4s cubic-bezier(0.2, 0.7, 0.3, 1) infinite both;
+}
+.splash-ring-1 { animation-delay: 0.45s; }
+.splash-ring-2 { animation-delay: 1.25s; }
+.splash-ring-3 { animation-delay: 2.05s; }
+
+/* Titre révélé lettre par lettre, avec un flou qui se dissipe */
+.splash-title {
+  margin-top: 26px;
+  color: #fff;
+  font-size: 1.65rem;
+  letter-spacing: 0.02em;
+  text-shadow: 0 2px 14px rgba(5, 20, 45, 0.45);
+  display: flex;
+  white-space: nowrap;
+}
+.splash-char {
+  display: inline-block;
+  opacity: 0;
+  animation: splashChar 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.splash-sub {
+  margin-top: 6px;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.8rem;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  animation: splashSub 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) 1.15s both;
+}
+.splash-progress {
+  position: absolute;
+  bottom: calc(52px + env(safe-area-inset-bottom));
+  width: 120px;
+  height: 3px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+}
+.splash-progress > span {
+  display: block;
+  height: 100%;
+  width: 40%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.2), #fff, rgba(255, 255, 255, 0.2));
+  animation: splashProgress 1.2s ease-in-out infinite;
+}
+
+@keyframes splashOut  { to { opacity: 0; } }
+@keyframes splashLift { to { transform: scale(1.08) translateY(-10px); opacity: 0; } }
+@keyframes splashLogo {
+  0%   { opacity: 0; transform: scale(0.35) rotate(-8deg); }
+  55%  { opacity: 1; }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+@keyframes splashGlow { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
+@keyframes splashBreath { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.08); opacity: 0.8; } }
+@keyframes splashOrbitIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes splashSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes splashShine { from { left: -70%; } to { left: 140%; } }
+@keyframes splashRing { from { opacity: 0.7; transform: scale(1); } to { opacity: 0; transform: scale(3); } }
+@keyframes splashChar {
+  from { opacity: 0; transform: translateY(16px); filter: blur(8px); letter-spacing: 0.3em; }
+  to   { opacity: 1; transform: translateY(0); filter: blur(0); letter-spacing: 0.02em; }
+}
+@keyframes splashSub { from { opacity: 0; letter-spacing: 0.6em; } to { opacity: 1; letter-spacing: 0.32em; } }
+@keyframes splashProgress { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
+
+/* Barre du bas : pilule lumineuse qui glisse vers l'onglet actif, icône qui rebondit */
+.nav-glow {
+  position: absolute;
+  top: 0.35rem;
+  bottom: calc(0.35rem + env(safe-area-inset-bottom));
+  left: 8px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  transition: transform 0.45s cubic-bezier(0.34, 1.4, 0.4, 1), opacity 0.2s;
+  z-index: 1;
+  pointer-events: none;
+}
+.nav-glow-hidden { opacity: 0; }
+.nav-icon-active {
+}
+.nav-label-active {
+}
+@keyframes navPop {
+  0%   { transform: scale(0.8) translateY(2px); }
+  55%  { transform: scale(1.22) translateY(-3px); }
+  100% { transform: scale(1) translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-glow { transition: none; }
+}
+
+/* En-tête flottant sans cadre : simple voile dégradé pour rester lisible sur le contenu qui défile */
+.header-scrim {
+  background: linear-gradient(180deg, rgba(19, 44, 71, 0.9) 0%, rgba(19, 44, 71, 0.7) 50%, rgba(19, 44, 71, 0) 100%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 60%, rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(180deg, #000 0%, #000 60%, rgba(0, 0, 0, 0) 100%);
+  pointer-events: none;
+}
+.header-scrim > * { pointer-events: auto; }
+
+/* Bandeau d'accueil public : visuel de couverture de l'annuaire derrière un voile charbon */
+.hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 24px;
+  isolation: isolate;
+  box-shadow: 0 24px 60px -24px rgba(8, 6, 4, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.hero-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 70%;
+  z-index: -2;
+}
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(180deg, rgba(16, 16, 18, 0.55) 0%, rgba(16, 16, 18, 0.72) 55%, rgba(16, 16, 18, 0.88) 100%);
+}
+.hero-tagline {
+  @apply uppercase tracking-[0.28em] text-xs sm:text-sm font-semibold mb-4 sm:mb-5;
+  color: #f29a4a;
+  text-shadow: 0 1px 3px rgba(8, 6, 4, 0.6);
+}

@@ -1,0 +1,219 @@
+import { useState, useEffect } from 'react';
+import { api } from '../../utils/api';
+import { formatDate, formatTime, getEventTypeLabel } from '../../utils/helpers';
+import Collapse from '../ui/Collapse';
+import AdminRsvpManager from './AdminRsvpManager';
+
+const emptyForm = {
+  title: '', type: 'matinale', date: '', timeStart: '07:30',
+  timeEnd: '', location: 'Velay Semène', description: '', speaker: ''
+};
+
+export default function AdminEvents() {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(emptyForm);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [rsvpOpen, setRsvpOpen] = useState(null); // événement dont on gère les inscriptions
+
+  useEffect(() => { loadEvents(); }, []);
+
+  const loadEvents = async () => {
+    setLoading(true);
+    setMsg('');
+    try {
+      const data = await api.getEvents();
+      setEvents(data);
+    } catch (err) {
+      setMsg(`Erreur : ${err.message}`);
+    }
+    setLoading(false);
+  };
+
+  // Met à jour le nombre d'inscrits affiché sans recharger toute la liste
+  const refreshCounts = async () => {
+    try {
+      const data = await api.getEvents();
+      setEvents(prev => prev.map(ev => ({ ...ev, _count: data.find(d => d.id === ev.id)?._count ?? ev._count })));
+    } catch {}
+  };
+
+  const openCreate = () => {
+    setEditingId(null);
+    setForm(emptyForm);
+    setShowForm(true);
+  };
+
+  const openEdit = (e) => {
+    setEditingId(e.id);
+    setForm({
+      title: e.title || '',
+      type: e.type || 'matinale',
+      date: e.date ? e.date.slice(0, 10) : '',
+      timeStart: e.timeStart || '',
+      timeEnd: e.timeEnd || '',
+      location: e.location || '',
+      description: e.description || '',
+      speaker: e.speaker || ''
+    });
+    setShowForm(true);
+  };
+
+  const cancelForm = () => {
+    setShowForm(false);
+    setEditingId(null);
+    setForm(emptyForm);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    setMsg('');
+    try {
+      if (editingId) {
+        const updated = await api.updateEvent(editingId, form);
+        setEvents(prev => prev.map(ev => ev.id === editingId ? { ...ev, ...updated } : ev));
+        setMsg('Événement modifié.');
+      } else {
+        await api.createEvent(form);
+        await loadEvents();
+        setMsg('Événement créé.');
+      }
+      cancelForm();
+    } catch (err) {
+      setMsg(`Erreur : ${err.message}`);
+    }
+    setSaving(false);
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Supprimer cet événement ?')) return;
+    setMsg('');
+    try {
+      await api.deleteEvent(id);
+      setEvents(prev => prev.filter(e => e.id !== id));
+      setMsg('Événement supprimé.');
+    } catch (err) {
+      setMsg(`Erreur : ${err.message}`);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center gap-2">
+        <h3 className="font-semibold text-sm sm:text-base text-white">Événements ({events.length})</h3>
+        <button onClick={showForm ? cancelForm : openCreate} className="btn-primary text-xs sm:text-sm py-2 px-3 sm:px-4 flex-shrink-0">
+          {showForm ? 'Annuler' : '+ Créer'}
+        </button>
+      </div>
+
+      {msg && (
+        <p className={`text-sm rounded-xl px-3 py-2 ${msg.startsWith('Erreur') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>{msg}</p>
+      )}
+
+      {showForm && (
+        <form onSubmit={handleSubmit} className="card p-3 sm:p-5 space-y-3 sm:space-y-4">
+          <h4 className="font-semibold text-sm text-brand-dark">
+            {editingId ? 'Modifier l\'événement' : 'Nouvel événement'}
+          </h4>
+          <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="block text-xs sm:text-sm font-medium mb-1">Titre</label>
+              <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} className="input-field text-sm" required />
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-medium mb-1">Type</label>
+              <select value={form.type} onChange={e => setForm({...form, type: e.target.value})} className="input-field text-sm">
+                <option value="matinale">Matinale</option>
+                <option value="afterwork">Afterwork</option>
+                <option value="formation">Formation</option>
+                <option value="conference">Conférence</option>
+                <option value="special">Spécial</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-medium mb-1">Date</label>
+              <input type="date" value={form.date} onChange={e => setForm({...form, date: e.target.value})} className="input-field text-sm" required />
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-medium mb-1">Heure début</label>
+              <input type="time" value={form.timeStart} onChange={e => setForm({...form, timeStart: e.target.value})} className="input-field text-sm" required />
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-medium mb-1">Heure fin</label>
+              <input type="time" value={form.timeEnd} onChange={e => setForm({...form, timeEnd: e.target.value})} className="input-field text-sm" />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs sm:text-sm font-medium mb-1">Lieu / Adresse</label>
+              <input value={form.location} onChange={e => setForm({...form, location: e.target.value})} className="input-field text-sm" placeholder="Adresse complète" required />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs sm:text-sm font-medium mb-1">Description</label>
+            <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} className="input-field text-sm resize-none" rows={2} />
+          </div>
+          <div>
+            <label className="block text-xs sm:text-sm font-medium mb-1">Intervenant(s)</label>
+            <input value={form.speaker} onChange={e => setForm({...form, speaker: e.target.value})} className="input-field text-sm" />
+          </div>
+          <button type="submit" className="btn-primary text-sm w-full sm:w-auto" disabled={saving}>
+            {saving ? 'Enregistrement...' : editingId ? 'Enregistrer' : 'Créer l\'événement'}
+          </button>
+        </form>
+      )}
+
+      {loading ? (
+        <div className="flex justify-center py-8"><div className="animate-spin w-8 h-8 border-4 border-white border-t-transparent rounded-full" /></div>
+      ) : (
+        <div className="space-y-2 sm:space-y-3">
+          {events.map(e => (
+            <div key={e.id} className="card p-3 sm:p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate text-sm sm:text-base">{e.title}</p>
+                  <p className="text-xs sm:text-sm text-text-muted mt-0.5">
+                    {formatDate(e.date)} — {formatTime(e.timeStart)}
+                  </p>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-brand-light text-brand-dark">{getEventTypeLabel(e.type)}</span>
+                    {e.location && (
+                      <span className="text-xs text-text-muted truncate">{e.location}</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+                  <button onClick={() => openEdit(e)} className="text-xs sm:text-sm text-brand hover:underline whitespace-nowrap">
+                    Modifier
+                  </button>
+                  <button onClick={() => handleDelete(e.id)} className="text-xs sm:text-sm text-red-500 hover:underline whitespace-nowrap">
+                    Supprimer
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRsvpOpen(o => (o === e.id ? null : e.id))}
+                aria-expanded={rsvpOpen === e.id}
+                className="mt-3 w-full flex items-center justify-between gap-2 text-xs sm:text-sm font-semibold text-brand-dark bg-brand-light/70 hover:bg-brand-light rounded-full px-4 py-2 transition-colors"
+              >
+                <span>Gérer les inscriptions · {e._count?.rsvps ?? 0} inscrit{(e._count?.rsvps ?? 0) > 1 ? 's' : ''}</span>
+                <svg className={`w-4 h-4 transition-transform duration-300 ${rsvpOpen === e.id ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                </svg>
+              </button>
+              <Collapse open={rsvpOpen === e.id}>
+                <div className="pt-3">
+                  {rsvpOpen === e.id && <AdminRsvpManager eventId={e.id} onChange={refreshCounts} />}
+                </div>
+              </Collapse>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
