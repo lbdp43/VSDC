@@ -101,7 +101,8 @@ export default function Home() {
           </h1>
           <p className="hero-tagline">Le réseau qui joue en équipe</p>
           <p className="text-base sm:text-lg on-bg-muted max-w-2xl mx-auto mb-6 sm:mb-8 px-2">
-            {settings?.description || "Club d'affaires du Velay Semène — Échanges, recommandations et collaborations entre professionnels du territoire."}
+            {(settings?.description || "Club d'affaires du Velay Semène — Échanges, recommandations et collaborations entre professionnels du territoire.")
+              .replace(/^le réseau qui joue en équipe\.?\s*/i, '')}
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <Link to="/inscription" className="bg-white text-brand-dark px-6 py-3 rounded-full font-semibold shadow-lg shadow-brand-dark/30 hover:bg-brand-light transition-colors">Rejoindre le club</Link>

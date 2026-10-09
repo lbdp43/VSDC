@@ -57,7 +57,7 @@ async function main() {
     create: {
       id: 1,
       name: 'Velay Semène Business Club',
-      description: "Le réseau qui joue en équipe. Club d'affaires du Velay Semène, porté par le FCDS : échanges, recommandations et collaborations entre professionnels du territoire.",
+      description: "Club d'affaires du Velay Semène, porté par le FCDS : échanges, recommandations et collaborations entre professionnels du territoire.",
       contactEmail: 'contact@vsbc-fcds.fr',
       address: 'Velay Semène'
     }
