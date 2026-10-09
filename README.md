@@ -50,7 +50,7 @@ npm run dev
 
 ## Production (Railway)
 
-Le déploiement est automatique via `railway.toml`. La commande de démarrage exécute les migrations, le seed, puis le serveur.
+Le déploiement est automatique via `railway.toml`. La commande de démarrage pousse le schéma, exécute le seed (idempotent : paramètres, admins, annuaire, rencontres), puis lance le serveur.
 
 ## Données initiales
 
