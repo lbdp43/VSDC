@@ -1,0 +1,612 @@
+import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { Navigate } from 'react-router-dom';
+import { api } from '../utils/api';
+import { useAuth } from '../hooks/useAuth';
+import { whatsappLink, mapsUrl, imgUrl } from '../utils/helpers';
+
+const SECTORS = [
+  'Artisanat', 'Automobile', 'BTP / Construction', 'Commerce', 'Communication / Marketing',
+  'Comptabilité / Finance', 'Conseil', 'Culture / Loisirs', 'Droit / Juridique',
+  'Éducation / Formation', 'Environnement', 'Immobilier', 'Industrie',
+  'Informatique / Digital', 'Médical / Santé', 'Restauration / Hôtellerie',
+  'Services aux entreprises', 'Services à la personne', 'Sport / Bien-être',
+  'Transport / Logistique', 'Autre'
+];
+
+export default function Profile() {
+  const { user, refreshUser } = useAuth();
+  const [form, setForm] = useState({
+    firstName: '', lastName: '', companyName: '', jobTitle: '', sector: '', phone: '', address: '', city: '',
+    website: '', description: '', lookingFor: '', canOffer: '',
+    socialLinks: { linkedin: '', facebook: '', instagram: '' },
+    visibility: { phone: 'public', email: 'public' }
+  });
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [uploadMsg, setUploadMsg] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [pwForm, setPwForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwMsg, setPwMsg] = useState('');
+  const [reminderOptOut, setReminderOptOut] = useState(false);
+  const [reminderMsg, setReminderMsg] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteSending, setInviteSending] = useState(false);
+  const [inviteMsg, setInviteMsg] = useState('');
+  const logoRef = useRef();
+  const formRef = useRef(null);
+  const profilePhotoRef = useRef();
+  const seededFor = useRef(null);
+  const optOutSent = useRef(false);
+
+  // On pré-remplit le formulaire une seule fois par utilisateur : un rafraîchissement
+  // du profil (après upload de photo par ex.) ne doit pas écraser ce qui est en cours de saisie.
+  useEffect(() => {
+    if (user?.member && seededFor.current !== user.id) {
+      seededFor.current = user.id;
+      setForm({
+        firstName: user.member.firstName || '',
+        lastName: user.member.lastName || '',
+        companyName: user.member.companyName || '',
+        jobTitle: user.member.jobTitle || '',
+        sector: user.member.sector || '',
+        phone: user.member.phone || '',
+        address: user.member.address || '',
+        city: user.member.city || '',
+        website: user.member.website || '',
+        description: user.member.description || '',
+        lookingFor: user.member.lookingFor || '',
+        canOffer: user.member.canOffer || '',
+        socialLinks: user.member.socialLinks || { linkedin: '', facebook: '', instagram: '' },
+        visibility: user.member.visibility || { phone: 'public', email: 'public' }
+      });
+    }
+    if (user) {
+      setReminderOptOut(!!user.reminderOptOut);
+    }
+  }, [user]);
+
+  // Auto opt-out si l'utilisateur arrive via le lien de l'email de rappel
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('optout') === 'reminders' && user && !user.reminderOptOut && !optOutSent.current) {
+      optOutSent.current = true;
+      api.updateReminderPreferences(true)
+        .then(() => {
+          setReminderOptOut(true);
+          setReminderMsg('Vous ne recevrez plus de rappels d\'événements par email.');
+          if (refreshUser) refreshUser();
+        })
+        .catch(() => {});
+    }
+  }, [user, refreshUser]);
+
+  const handleToggleReminders = async () => {
+    const next = !reminderOptOut;
+    setReminderOptOut(next);
+    setReminderMsg('');
+    try {
+      await api.updateReminderPreferences(next);
+      setReminderMsg(next
+        ? 'Rappels d\'événements désactivés.'
+        : 'Rappels d\'événements réactivés.');
+      if (refreshUser) refreshUser();
+    } catch {
+      setReminderOptOut(!next);
+      setReminderMsg('Erreur lors de la mise à jour.');
+    }
+  };
+
+  const handleSendInvite = async (e) => {
+    e.preventDefault();
+    setInviteMsg('');
+    setInviteSending(true);
+    try {
+      await api.sendInvite(inviteEmail.trim());
+      setInviteMsg(`Invitation envoyée à ${inviteEmail.trim()}.`);
+      setInviteEmail('');
+    } catch (err) {
+      setInviteMsg(err.message || 'Erreur lors de l\'envoi de l\'invitation.');
+    } finally {
+      setInviteSending(false);
+    }
+  };
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    setPwMsg('');
+    if (pwForm.newPassword !== pwForm.confirmPassword) {
+      setPwMsg('Les mots de passe ne correspondent pas.');
+      return;
+    }
+    if (pwForm.newPassword.length < 8) {
+      setPwMsg('Le nouveau mot de passe doit contenir au moins 8 caractères.');
+      return;
+    }
+    setPwSaving(true);
+    try {
+      const res = await api.changePassword(pwForm.currentPassword, pwForm.newPassword);
+      setPwMsg(res.message || 'Mot de passe modifié.');
+      setPwForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    } catch (err) {
+      setPwMsg(err.message || 'Erreur lors du changement.');
+    }
+    setPwSaving(false);
+  };
+
+  if (!user) return <Navigate to="/connexion" replace />;
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setMsg('');
+    try {
+      await api.updateMember(user.id, form);
+      await refreshUser();
+      setMsg('Profil enregistré.');
+    } catch (err) {
+      setMsg(err.message);
+    }
+    setSaving(false);
+  };
+
+  const MAX_UPLOAD = 8 * 1024 * 1024;
+  const tooBig = (files) => files.some(f => f.size > MAX_UPLOAD);
+
+  const handleLogoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (tooBig([file])) { setUploadMsg('Erreur logo : fichier trop lourd (8 Mo max).'); return; }
+    setUploading(true);
+    setUploadMsg('');
+    const formData = new FormData();
+    formData.append('photos', file);
+    formData.append('type', 'logo');
+    try {
+      await api.uploadPhotos(user.id, formData);
+      await refreshUser();
+      setUploadMsg('Logo mis à jour.');
+    } catch (err) {
+      setUploadMsg(`Erreur logo : ${err.message}`);
+    }
+    setUploading(false);
+  };
+
+  const handleProfilePhotoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (tooBig([file])) { setUploadMsg('Erreur photo de profil : fichier trop lourd (8 Mo max).'); return; }
+    setUploading(true);
+    setUploadMsg('');
+    const formData = new FormData();
+    formData.append('photos', file);
+    formData.append('type', 'profile');
+    try {
+      await api.uploadPhotos(user.id, formData);
+      await refreshUser();
+      setUploadMsg('Photo de profil mise à jour.');
+    } catch (err) {
+      setUploadMsg('Erreur photo de profil : ' + err.message);
+    }
+    setUploading(false);
+  };
+
+  const handlePhotoUpload = async (e) => {
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    if (!files.length) return;
+    if (files.length > 10) { setUploadMsg('Erreur photos : 10 photos maximum à la fois.'); return; }
+    if (tooBig(files)) { setUploadMsg('Erreur photos : un fichier dépasse 8 Mo.'); return; }
+    setUploading(true);
+    setUploadMsg('');
+    const formData = new FormData();
+    files.forEach(f => formData.append('photos', f));
+    formData.append('type', 'gallery');
+    try {
+      await api.uploadPhotos(user.id, formData);
+      await refreshUser();
+      setUploadMsg('Photos ajoutées.');
+    } catch (err) {
+      setUploadMsg(`Erreur photos : ${err.message}`);
+    }
+    setUploading(false);
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-6 pb-16 lg:pb-0">
+      <h1 className="page-title">Mon profil</h1>
+
+      <form ref={formRef} onSubmit={handleSave} className="card p-4 sm:p-6 space-y-5">
+        {/* Photo de profil + Logo */}
+        <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
+          {/* Photo de profil */}
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              {user.member?.photoUrl ? (
+                <img src={imgUrl(user.member.photoUrl, 200)} alt="Ma photo de profil" className="w-20 h-20 sm:w-24 sm:h-24 rounded-full object-cover" />
+              ) : (
+                <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-gray-100 flex items-center justify-center text-gray-400">
+                  <svg className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0" />
+                  </svg>
+                </div>
+              )}
+              {uploading && (
+                <div className="absolute inset-0 bg-white/80 rounded-full flex items-center justify-center">
+                  <div className="animate-spin w-6 h-6 border-3 border-brand border-t-transparent rounded-full" />
+                </div>
+              )}
+            </div>
+            <div>
+              <p className="text-xs text-text-muted mb-1">Photo de profil</p>
+              <button type="button" onClick={() => profilePhotoRef.current?.click()} className={`text-sm text-brand hover:underline ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                {user.member?.photoUrl ? 'Changer' : 'Ajouter'}
+              </button>
+              {uploadMsg && uploadMsg.includes('photo de profil') && (
+                <p className={`text-xs mt-1 ${uploadMsg.includes('Erreur') ? 'text-red-500' : 'text-green-600'}`}>{uploadMsg}</p>
+              )}
+            </div>
+            <input ref={profilePhotoRef} type="file" accept="image/*" onChange={handleProfilePhotoUpload} className="hidden" />
+          </div>
+
+          {/* Logo entreprise */}
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              {user.member?.logoUrl ? (
+                <img src={imgUrl(user.member.logoUrl, 200)} alt="Mon logo" className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-contain bg-white border border-gray-100" />
+              ) : (
+                <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl bg-brand-light flex items-center justify-center text-brand font-bold text-2xl">
+                  {form.companyName?.charAt(0) || '?'}
+                </div>
+              )}
+              {uploading && (
+                <div className="absolute inset-0 bg-white/80 rounded-xl flex items-center justify-center">
+                  <div className="animate-spin w-6 h-6 border-3 border-brand border-t-transparent rounded-full" />
+                </div>
+              )}
+            </div>
+            <div>
+              <p className="text-xs text-text-muted mb-1">Logo entreprise</p>
+              <button type="button" onClick={() => logoRef.current?.click()} className={`text-sm text-brand hover:underline ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                {user.member?.logoUrl ? 'Changer' : 'Ajouter'}
+              </button>
+              {uploadMsg && uploadMsg.toLowerCase().includes('logo') && (
+                <p className={`text-xs mt-1 ${uploadMsg.includes('Erreur') ? 'text-red-500' : 'text-green-600'}`}>{uploadMsg}</p>
+              )}
+            </div>
+            <input ref={logoRef} type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+          </div>
+        </div>
+
+        {/* Champs obligatoires */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="block text-sm font-medium mb-1">Prénom *</label>
+            <input value={form.firstName} onChange={e => setForm({...form, firstName: e.target.value})} className="input-field" autoComplete="given-name" maxLength={80} required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Nom *</label>
+            <input value={form.lastName} onChange={e => setForm({...form, lastName: e.target.value})} className="input-field" autoComplete="family-name" maxLength={80} required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Société *</label>
+            <input value={form.companyName} onChange={e => setForm({...form, companyName: e.target.value})} className="input-field" required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Métier / Activité *</label>
+            <input value={form.jobTitle} onChange={e => setForm({...form, jobTitle: e.target.value})} className="input-field" required />
+          </div>
+          <div>
+            <label className="block text-xs sm:text-sm font-medium mb-1">Secteur d'activité</label>
+            <input
+              list="profile-sectors"
+              value={form.sector || ''}
+              onChange={e => setForm({...form, sector: e.target.value || null})}
+              className="input-field text-sm"
+              placeholder="Ex : Notaire, Producteur de liqueur…"
+            />
+            <datalist id="profile-sectors">
+              {SECTORS.map(s => (<option key={s} value={s} />))}
+            </datalist>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Téléphone *</label>
+            <input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} className="input-field" required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Ville</label>
+            <input value={form.city} onChange={e => setForm({...form, city: e.target.value})} className="input-field" />
+          </div>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Adresse complète *</label>
+          <input value={form.address} onChange={e => setForm({...form, address: e.target.value})} className="input-field" required />
+        </div>
+
+        {/* Champs optionnels */}
+        <div>
+          <label className="block text-sm font-medium mb-1">Site web</label>
+          <input value={form.website} onChange={e => setForm({...form, website: e.target.value})} className="input-field" placeholder="https://..." />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Description de l'activité</label>
+          <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} className="input-field resize-none" rows={3} />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Ce que je recherche</label>
+          <textarea value={form.lookingFor} onChange={e => setForm({...form, lookingFor: e.target.value})} className="input-field resize-none" rows={2} placeholder="Ex : bars et restaurants partenaires" />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Ce que je peux apporter</label>
+          <textarea value={form.canOffer} onChange={e => setForm({...form, canOffer: e.target.value})} className="input-field resize-none" rows={2} />
+        </div>
+
+        {/* Réseaux sociaux */}
+        <h3 className="font-semibold text-sm text-text-muted pt-2">Réseaux sociaux</h3>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <input
+            placeholder="LinkedIn"
+            value={form.socialLinks.linkedin || ''}
+            onChange={e => setForm({...form, socialLinks: {...form.socialLinks, linkedin: e.target.value}})}
+            className="input-field text-sm"
+          />
+          <input
+            placeholder="Facebook"
+            value={form.socialLinks.facebook || ''}
+            onChange={e => setForm({...form, socialLinks: {...form.socialLinks, facebook: e.target.value}})}
+            className="input-field text-sm"
+          />
+          <input
+            placeholder="Instagram"
+            value={form.socialLinks.instagram || ''}
+            onChange={e => setForm({...form, socialLinks: {...form.socialLinks, instagram: e.target.value}})}
+            className="input-field text-sm sm:col-span-2"
+          />
+        </div>
+
+        {/* Visibilité */}
+        <h3 className="font-semibold text-sm text-text-muted pt-2">Visibilité pour les visiteurs</h3>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="block text-sm mb-1">Téléphone</label>
+            <select value={form.visibility.phone} onChange={e => setForm({...form, visibility: {...form.visibility, phone: e.target.value}})} className="input-field">
+              <option value="public">Visible publiquement</option>
+              <option value="members">Membres uniquement</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Email</label>
+            <select value={form.visibility.email} onChange={e => setForm({...form, visibility: {...form.visibility, email: e.target.value}})} className="input-field">
+              <option value="public">Visible publiquement</option>
+              <option value="members">Membres uniquement</option>
+            </select>
+          </div>
+        </div>
+
+        {msg && <p className={`text-sm ${msg.includes('Erreur') ? 'text-red-500' : 'text-green-600'}`}>{msg}</p>}
+        {/* Ordinateur : bouton en bas du formulaire. Mobile : barre flottante (rendue dans <body>) */}
+        <button type="submit" className="btn-primary hidden lg:inline-flex" disabled={saving}>
+          {saving ? 'Sauvegarde...' : 'Enregistrer le profil'}
+        </button>
+        {createPortal(
+          <div className="lg:hidden fixed left-0 right-0 bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-30 px-3 pointer-events-none">
+            <div className="max-w-2xl mx-auto glass-dark rounded-full p-1.5 flex items-center gap-2 pointer-events-auto text-white">
+              <span className="text-xs text-white/85 flex-1 pl-3 truncate">{msg || 'Mon profil'}</span>
+              <button
+                type="button"
+                onClick={() => formRef.current?.requestSubmit()}
+                disabled={saving}
+                className="bg-white text-brand-dark text-sm font-semibold px-5 py-2.5 rounded-full shadow disabled:opacity-60"
+              >
+                {saving ? 'Sauvegarde…' : 'Enregistrer'}
+              </button>
+            </div>
+          </div>,
+          document.body
+        )}
+      </form>
+
+      {/* Photos */}
+      <div className="card p-4 sm:p-6 relative">
+        {uploading && (
+          <div className="absolute inset-0 bg-white/80 rounded-card flex flex-col items-center justify-center z-10">
+            <div className="animate-spin w-8 h-8 border-4 border-brand border-t-transparent rounded-full" />
+            <p className="text-sm text-text-muted mt-2">Envoi en cours...</p>
+          </div>
+        )}
+        <h3 className="font-semibold mb-4">Photos de l'entreprise</h3>
+        {uploadMsg && (
+          <p className={`text-sm mb-3 ${uploadMsg.includes('Erreur') ? 'text-red-500' : 'text-green-600'}`}>{uploadMsg}</p>
+        )}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+          {(user.member?.photos || []).map((url, i) => (
+            <div key={url} className="relative">
+              <img src={imgUrl(url, 400)} alt={`Photo ${i + 1}`} loading="lazy" className="rounded-xl object-cover w-full h-24" />
+              <button
+                type="button"
+                aria-label="Supprimer cette photo"
+                onClick={async () => {
+                  if (!confirm('Supprimer cette photo ?')) return;
+                  try { await api.deletePhoto(user.id, i); await refreshUser(); }
+                  catch (err) { setUploadMsg(`Erreur suppression : ${err.message}`); }
+                }}
+                className="absolute top-1 right-1 w-6 h-6 bg-red-500 text-white rounded-full text-xs flex items-center justify-center"
+              >
+                &times;
+              </button>
+            </div>
+          ))}
+        </div>
+        <label className={`text-sm text-brand hover:underline cursor-pointer ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
+          + Ajouter des photos
+          <input type="file" multiple accept="image/*" onChange={handlePhotoUpload} className="hidden" />
+        </label>
+      </div>
+
+      {/* Préférences de notifications */}
+      <div className="card p-4 sm:p-6">
+        <h3 className="font-semibold mb-3">Notifications par email</h3>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">Rappels d'événements</p>
+            <p className="text-xs text-text-muted">
+              Recevoir une relance par email avant les événements auxquels je n'ai pas répondu.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleToggleReminders}
+            className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
+              !reminderOptOut ? 'bg-brand' : 'bg-gray-300'
+            }`}
+            aria-label="Activer/désactiver les rappels"
+          >
+            <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform shadow ${
+              !reminderOptOut ? 'translate-x-5' : ''
+            }`} />
+          </button>
+        </div>
+        {reminderMsg && (
+          <p className="text-xs text-green-600 mt-2">{reminderMsg}</p>
+        )}
+      </div>
+
+      {/* Inviter un membre */}
+      <form onSubmit={handleSendInvite} className="card p-4 sm:p-6 space-y-3">
+        <div>
+          <h3 className="font-semibold">Inviter un membre au club</h3>
+          <p className="text-xs text-text-muted mt-0.5">
+            Il recevra un email avec un lien de connexion directe. Il sera automatiquement enregistré comme membre.
+          </p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Email de la personne à inviter</label>
+          <input
+            type="email"
+            value={inviteEmail}
+            onChange={e => setInviteEmail(e.target.value)}
+            className="input-field"
+            placeholder="nom@exemple.fr"
+            required
+          />
+        </div>
+        {inviteMsg && (
+          <p className={`text-sm ${inviteMsg.toLowerCase().includes('erreur') ? 'text-red-500' : 'text-green-600'}`}>
+            {inviteMsg}
+          </p>
+        )}
+        <button type="submit" className="btn-primary text-sm" disabled={inviteSending || !inviteEmail}>
+          {inviteSending ? 'Envoi...' : 'Envoyer l\'invitation'}
+        </button>
+      </form>
+
+      {/* Mot de passe */}
+      <form onSubmit={handleChangePassword} className="card p-4 sm:p-6 space-y-4">
+        <h3 className="font-semibold">Changer mon mot de passe</h3>
+        <div>
+          <label className="block text-sm font-medium mb-1">Mot de passe actuel</label>
+          <input
+            type="password"
+            value={pwForm.currentPassword}
+            onChange={e => setPwForm({...pwForm, currentPassword: e.target.value})}
+            className="input-field"
+            required
+            autoComplete="current-password"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Nouveau mot de passe</label>
+          <input
+            type="password"
+            value={pwForm.newPassword}
+            onChange={e => setPwForm({...pwForm, newPassword: e.target.value})}
+            className="input-field"
+            required
+            minLength={8}
+            autoComplete="new-password"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Confirmer le nouveau mot de passe</label>
+          <input
+            type="password"
+            value={pwForm.confirmPassword}
+            onChange={e => setPwForm({...pwForm, confirmPassword: e.target.value})}
+            className="input-field"
+            required
+            minLength={8}
+            autoComplete="new-password"
+          />
+        </div>
+        {pwMsg && (
+          <p className={`text-sm ${pwMsg.includes('modifié') ? 'text-green-600' : 'text-red-500'}`}>{pwMsg}</p>
+        )}
+        <button type="submit" className="btn-secondary text-sm" disabled={pwSaving}>
+          {pwSaving ? 'Modification...' : 'Modifier le mot de passe'}
+        </button>
+      </form>
+
+      {/* Aperçu des liens de contact */}
+      {(form.phone || user?.email || form.website || form.socialLinks?.linkedin || form.socialLinks?.facebook || form.socialLinks?.instagram || form.address) && (
+        <div className="card p-4 sm:p-6">
+          <h3 className="font-semibold mb-4">Aperçu de vos liens de contact</h3>
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-3 mb-4">
+            {form.phone && (
+              <a href={`tel:${form.phone}`} className="btn-primary text-sm py-2 px-4 text-center">
+                Appeler
+              </a>
+            )}
+            {user?.email && (
+              <a href={`mailto:${user.email}`} className="btn-secondary text-sm py-2 px-4 text-center">
+                Email
+              </a>
+            )}
+            {form.phone && (
+              <a href={whatsappLink(form.phone)} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm py-2 px-4 text-center">
+                WhatsApp
+              </a>
+            )}
+            {form.website && (
+              <a href={form.website} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm py-2 px-4 text-center">
+                Site web
+              </a>
+            )}
+          </div>
+          <div className="space-y-2 text-sm">
+            {form.address && (
+              <p>
+                <span className="text-text-muted">Adresse :</span>{' '}
+                <a href={mapsUrl(form.address)} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline inline-flex items-center gap-1">
+                  {form.address}
+                  <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                  </svg>
+                </a>
+              </p>
+            )}
+            <div className="flex flex-wrap gap-3">
+              {form.socialLinks?.linkedin && (
+                <a href={form.socialLinks.linkedin} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">
+                  LinkedIn
+                </a>
+              )}
+              {form.socialLinks?.facebook && (
+                <a href={form.socialLinks.facebook} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">
+                  Facebook
+                </a>
+              )}
+              {form.socialLinks?.instagram && (
+                <a href={form.socialLinks.instagram} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">
+                  Instagram
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

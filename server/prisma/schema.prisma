@@ -1,0 +1,286 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  visitor
+  member
+  moderator
+  admin
+}
+
+enum UserStatus {
+  active
+  suspended
+}
+
+enum EventType {
+  matinale
+  afterwork
+  formation
+  conference
+  special
+}
+
+enum PostType {
+  post
+  demande
+}
+
+model User {
+  id                String     @id @default(uuid()) @db.Uuid
+  email             String     @unique
+  role              Role       @default(visitor)
+  status            UserStatus @default(active)
+  passwordHash      String?    @map("password_hash")
+  magicToken        String?    @map("magic_token")
+  magicTokenExpires DateTime?  @map("magic_token_expires")
+  googleId          String?    @map("google_id")
+  onboardingDone    Boolean    @default(false) @map("onboarding_done")
+  gdprConsentAt     DateTime?  @map("gdpr_consent_at")
+  invitedBy         String?    @map("invited_by") @db.Uuid
+  createdAt         DateTime   @default(now()) @map("created_at")
+  lastLogin         DateTime?  @map("last_login")
+  reminderOptOut    Boolean    @default(false) @map("reminder_opt_out")
+  secondaryEmails   String[]   @default([]) @map("secondary_emails")
+
+  inviter       User?      @relation("Invitations", fields: [invitedBy], references: [id])
+  invitees      User[]     @relation("Invitations")
+  member        Member?
+  posts         Post[]
+  comments      Comment[]
+  likes         Like[]
+  favorites     Favorite[] @relation("UserFavorites")
+  favoritedBy   Favorite[] @relation("FavoritedMember")
+  eventsCreated Event[]
+  rsvps         Rsvp[]
+  pushSubscriptions PushSubscription[]
+  reminderLogs  EventReminderLog[]
+
+  @@map("users")
+  @@index([status])
+  @@index([role])
+}
+
+model Member {
+  id          String   @id @db.Uuid
+  firstName   String?  @map("first_name")
+  lastName    String?  @map("last_name")
+  companyName String   @map("company_name")
+  jobTitle    String   @map("job_title")
+  sector      String?  @map("sector")
+  phone       String
+  address     String
+  city        String?
+  latitude    Float?
+  longitude   Float?
+  logoUrl     String?  @map("logo_url")
+  photoUrl    String?  @map("photo_url")
+  photos      Json     @default("[]")
+  website     String?
+  socialLinks Json     @default("{}") @map("social_links")
+  description String?
+  lookingFor  String?  @map("looking_for")
+  canOffer    String?  @map("can_offer")
+  visibility  Json     @default("{\"phone\":\"private\",\"email\":\"private\"}")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [id], references: [id], onDelete: Cascade)
+
+  @@map("members")
+  @@index([sector])
+}
+
+model Event {
+  id                 String    @id @default(uuid()) @db.Uuid
+  title              String
+  type               EventType
+  date               DateTime  @db.Date
+  timeStart          String    @map("time_start")
+  timeEnd            String?   @map("time_end")
+  location           String
+  description        String?
+  speaker            String?
+  createdBy          String?   @map("created_by") @db.Uuid
+  recurrenceGroup    String?   @map("recurrence_group") @db.Uuid
+  remindersDisabled  Boolean   @default(false) @map("reminders_disabled")
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  creator          User?                @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  rsvps            Rsvp[]
+  reminderBatches  EventReminderBatch[]
+  reminderLogs     EventReminderLog[]
+
+  @@map("events")
+  @@index([date])
+  @@index([type])
+}
+
+model EventReminderBatch {
+  eventId    String   @map("event_id") @db.Uuid
+  daysBefore Int      @map("days_before")
+  sentAt     DateTime @default(now()) @map("sent_at")
+  sentCount  Int      @default(0) @map("sent_count")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, daysBefore])
+  @@map("event_reminder_batches")
+}
+
+// Une ligne par relance envoyée à un membre pour un événement (mail réussi)
+model EventReminderLog {
+  id      String   @id @default(uuid()) @db.Uuid
+  eventId String   @map("event_id") @db.Uuid
+  userId  String   @map("user_id") @db.Uuid
+  kind    String   // 'auto' (rappel J-N) ou 'manual' (relance admin)
+  sentAt  DateTime @default(now()) @map("sent_at")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("event_reminder_logs")
+  @@index([eventId, userId])
+}
+
+model Post {
+  id          String   @id @default(uuid()) @db.Uuid
+  authorId    String   @map("author_id") @db.Uuid
+  type        PostType @default(post)
+  content     String
+  attachments Json     @default("[]")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  author   User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  comments Comment[]
+  likes    Like[]
+
+  @@map("posts")
+  @@index([authorId])
+  @@index([createdAt])
+}
+
+model Comment {
+  id        String   @id @default(uuid()) @db.Uuid
+  postId    String   @map("post_id") @db.Uuid
+  authorId  String   @map("author_id") @db.Uuid
+  content   String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@map("comments")
+  @@index([postId])
+  @@index([authorId])
+}
+
+model Like {
+  id        String   @id @default(uuid()) @db.Uuid
+  postId    String   @map("post_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@map("likes")
+  @@index([userId])
+}
+
+model Favorite {
+  id       String @id @default(uuid()) @db.Uuid
+  userId   String @map("user_id") @db.Uuid
+  memberId String @map("member_id") @db.Uuid
+
+  user   User @relation("UserFavorites", fields: [userId], references: [id], onDelete: Cascade)
+  member User @relation("FavoritedMember", fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, memberId])
+  @@map("favorites")
+  @@index([userId])
+  @@index([memberId])
+}
+
+model ClubSettings {
+  id                      Int     @id @default(1)
+  name                    String  @default("Velay Semène Business Club")
+  description             String  @default("")
+  logoUrl                 String? @map("logo_url")
+  contactEmail            String? @map("contact_email")
+  contactPhone            String? @map("contact_phone")
+  address                 String?
+  publicAgenda            Boolean @default(true) @map("public_agenda")
+  eventRemindersEnabled   Boolean @default(false) @map("event_reminders_enabled")
+  reminderDaysBefore      Int[]   @default([10, 5]) @map("reminder_days_before")
+  reminderMessage         String? @map("reminder_message")
+  pushRemindersEnabled    Boolean @default(true) @map("push_reminders_enabled")
+  pushNewEventEnabled     Boolean @default(true) @map("push_new_event_enabled")
+
+  @@map("club_settings")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id") @db.Uuid
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("sessions")
+  @@index([userId])
+}
+
+model PushSubscription {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("push_subscriptions")
+  @@index([userId])
+}
+
+model Upload {
+  id        String   @id @default(uuid()) @db.Uuid
+  data      Bytes
+  mimeType  String   @map("mime_type")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("uploads")
+}
+
+model Rsvp {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  eventId   String   @map("event_id") @db.Uuid
+  // going = inscrit, declined = a répondu « Pas dispo ». Sans ligne = pas encore répondu.
+  status    RsvpStatus @default(going)
+  // Invités amenés par le membre (seulement s'il participe) et leurs noms, facultatifs
+  guests     Int     @default(0)
+  guestNames String? @map("guest_names")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, eventId])
+  @@map("rsvps")
+  @@index([eventId])
+  @@index([userId])
+}
+
+enum RsvpStatus {
+  going
+  declined
+}

@@ -1,0 +1,190 @@
+const express = require('express');
+const prisma = require('../prisma/db');
+const { requireAuth } = require('../middleware/auth');
+const { requireMember } = require('../middleware/roles');
+const upload = require('../middleware/upload');
+const { uploadImage, uploadFile } = require('../services/cloudinaryUpload');
+const xss = require('xss');
+const logger = require('../utils/logger');
+
+const router = express.Router();
+
+// GET /api/posts
+router.get('/', requireAuth, requireMember, async (req, res) => {
+  try {
+    const { type, page = 1 } = req.query;
+    const take = 20;
+    const skip = (parseInt(page) - 1) * take;
+    const where = type ? { type } : {};
+
+    const [posts, total] = await Promise.all([
+      prisma.post.findMany({
+        where,
+        include: {
+          author: {
+            select: { id: true, email: true, member: { select: { companyName: true, logoUrl: true, photoUrl: true } } }
+          },
+          comments: {
+            take: 3,
+            orderBy: { createdAt: 'desc' },
+            include: {
+              author: {
+                select: { id: true, email: true, member: { select: { companyName: true } } }
+              }
+            }
+          },
+          _count: { select: { comments: true, likes: true } },
+          likes: {
+            select: { userId: true }
+          }
+        },
+        orderBy: { createdAt: 'desc' },
+        take,
+        skip
+      }),
+      prisma.post.count({ where })
+    ]);
+
+    res.set('X-Total-Count', total.toString());
+    res.json({ posts, total, page: parseInt(page), pages: Math.ceil(total / take) });
+  } catch (err) {
+    logger.error('Erreur posts', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/posts
+router.post('/', requireAuth, requireMember, upload.array('attachments', 5), async (req, res) => {
+  try {
+    const { content, type = 'post' } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ error: 'Contenu requis' });
+    }
+
+    const attachments = [];
+    if (req.files) {
+      for (const file of req.files) {
+        if (file.mimetype.startsWith('image/')) {
+          const url = await uploadImage(file.path);
+          attachments.push(url);
+        } else {
+          const url = await uploadFile(file.path);
+          attachments.push(url);
+        }
+      }
+    }
+
+    const post = await prisma.post.create({
+      data: {
+        authorId: req.user.id,
+        type,
+        content: xss(content),
+        attachments
+      },
+      include: {
+        author: {
+          select: { id: true, email: true, member: { select: { companyName: true, logoUrl: true, photoUrl: true } } }
+        },
+        comments: true,
+        likes: { select: { userId: true } },
+        _count: { select: { likes: true, comments: true } }
+      }
+    });
+
+    res.status(201).json(post);
+  } catch (err) {
+    logger.error('Erreur create post', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// DELETE /api/posts/comments/:id — DOIT être avant /:id pour éviter le conflit
+router.delete('/comments/:id', requireAuth, async (req, res) => {
+  try {
+    const comment = await prisma.comment.findUnique({ where: { id: req.params.id } });
+    if (!comment) return res.status(404).json({ error: 'Commentaire introuvable' });
+
+    const canDelete = comment.authorId === req.user.id ||
+      ['moderator', 'admin'].includes(req.user.role);
+    if (!canDelete) return res.status(403).json({ error: 'Non autorisé' });
+
+    await prisma.comment.delete({ where: { id: req.params.id } });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Erreur delete comment', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// DELETE /api/posts/:id
+router.delete('/:id', requireAuth, async (req, res) => {
+  try {
+    const post = await prisma.post.findUnique({ where: { id: req.params.id } });
+    if (!post) return res.status(404).json({ error: 'Publication introuvable' });
+
+    const canDelete = post.authorId === req.user.id ||
+      ['moderator', 'admin'].includes(req.user.role);
+    if (!canDelete) return res.status(403).json({ error: 'Non autorisé' });
+
+    await prisma.post.delete({ where: { id: req.params.id } });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Erreur delete post', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/posts/:id/comments
+router.post('/:id/comments', requireAuth, requireMember, async (req, res) => {
+  try {
+    const { content } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ error: 'Contenu requis' });
+    }
+
+    const post = await prisma.post.findUnique({ where: { id: req.params.id } });
+    if (!post) return res.status(404).json({ error: 'Publication introuvable' });
+
+    const comment = await prisma.comment.create({
+      data: {
+        postId: req.params.id,
+        authorId: req.user.id,
+        content: xss(content)
+      },
+      include: {
+        author: {
+          select: { id: true, email: true, member: { select: { companyName: true, logoUrl: true, photoUrl: true } } }
+        }
+      }
+    });
+
+    res.status(201).json(comment);
+  } catch (err) {
+    logger.error('Erreur create comment', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/posts/:id/like (toggle)
+router.post('/:id/like', requireAuth, requireMember, async (req, res) => {
+  try {
+    const existing = await prisma.like.findUnique({
+      where: { postId_userId: { postId: req.params.id, userId: req.user.id } }
+    });
+
+    if (existing) {
+      await prisma.like.delete({ where: { id: existing.id } });
+      res.json({ liked: false });
+    } else {
+      await prisma.like.create({
+        data: { postId: req.params.id, userId: req.user.id }
+      });
+      res.json({ liked: true });
+    }
+  } catch (err) {
+    logger.error('Erreur like', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+module.exports = router;

@@ -1,0 +1,557 @@
+import { useState, useEffect, useRef } from 'react';
+import { api } from '../../utils/api';
+import Collapse from '../ui/Collapse';
+
+export default function AdminSettings() {
+  const [settings, setSettings] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState('');
+  const logoRef = useRef();
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailMessage, setEmailMessage] = useState('');
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailMsg, setEmailMsg] = useState('');
+  const [testEmail, setTestEmail] = useState('');
+  const [testDaysBefore, setTestDaysBefore] = useState(10);
+  const [testSending, setTestSending] = useState(false);
+  const [testMsg, setTestMsg] = useState('');
+  const [customEmails, setCustomEmails] = useState('');
+  const [customSubject, setCustomSubject] = useState('');
+  const [customMessage, setCustomMessage] = useState('');
+  const [customJoinLink, setCustomJoinLink] = useState(true);
+  const [customSending, setCustomSending] = useState(false);
+  const [customMsg, setCustomMsg] = useState('');
+
+  useEffect(() => {
+    api.getSettings().then(data => setSettings({ ...data, publicAgenda: data.publicAgenda ?? true })).catch(() => {}).finally(() => setLoading(false));
+    api.getMe().then(me => setTestEmail(me.email || '')).catch(() => {});
+  }, []);
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const updated = await api.updateSettings(settings);
+      setSettings(updated);
+      setMsg('Paramètres enregistrés.');
+    } catch {
+      setMsg('Erreur lors de la sauvegarde.');
+    }
+    setSaving(false);
+  };
+
+  const handleLogoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('logo', file);
+    try {
+      const res = await api.uploadClubLogo(formData);
+      setSettings(prev => ({ ...prev, logoUrl: res.logoUrl }));
+    } catch {}
+  };
+
+  if (loading) {
+    return <div className="flex justify-center py-12"><div className="animate-spin w-8 h-8 border-4 border-white border-t-transparent rounded-full" /></div>;
+  }
+
+  const handleSendTest = async (e) => {
+    e.preventDefault();
+    setTestMsg('');
+    setTestSending(true);
+    try {
+      const res = await api.sendReminderTest(testEmail, testDaysBefore);
+      setTestMsg(`Email de test envoyé à ${res.email}. Regarde ta boîte dans quelques secondes.`);
+    } catch (err) {
+      setTestMsg(err.message || 'Erreur lors de l\'envoi du test.');
+    } finally {
+      setTestSending(false);
+    }
+  };
+
+  const handleSendCustomEmail = async (e) => {
+    e.preventDefault();
+    const count = customEmails.split(/[,;\n]+/).filter(e => e.trim()).length;
+    if (!confirm(`Envoyer cet email à ${count} adresse(s) ?`)) return;
+    setCustomMsg('');
+    setCustomSending(true);
+    try {
+      const res = await api.sendCustomEmail({
+        emails: customEmails,
+        subject: customSubject,
+        message: customMessage,
+        includeJoinLink: customJoinLink
+      });
+      setCustomMsg(res.message || `Email envoyé à ${res.sent} adresse(s).`);
+      setCustomEmails('');
+      setCustomSubject('');
+      setCustomMessage('');
+    } catch (err) {
+      setCustomMsg(err.message || "Erreur lors de l'envoi.");
+    } finally {
+      setCustomSending(false);
+    }
+  };
+
+  const handleSendEmail = async (e) => {
+    e.preventDefault();
+    if (!confirm(`Envoyer cet email à tous les membres actifs ?`)) return;
+    setEmailMsg('');
+    setEmailSending(true);
+    try {
+      const res = await api.sendNotification(emailSubject, emailMessage);
+      setEmailMsg(res.message || `Email envoyé à ${res.sent} membre(s).`);
+      setEmailSubject('');
+      setEmailMessage('');
+    } catch (err) {
+      setEmailMsg(err.message || "Erreur lors de l'envoi.");
+    } finally {
+      setEmailSending(false);
+    }
+  };
+
+  if (!settings) return null;
+
+  return (
+    <div className="space-y-4 sm:space-y-6">
+      <form onSubmit={handleSave} className="card p-3 sm:p-5 space-y-3 sm:space-y-4">
+        <h3 className="font-semibold text-sm sm:text-base">Paramètres du club</h3>
+
+        <div className="flex items-center gap-3 sm:gap-4">
+          {settings.logoUrl ? (
+            <img src={settings.logoUrl} alt="Logo" className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl object-cover flex-shrink-0" />
+          ) : (
+            <img src="/icons/logo.png" alt="Logo par défaut" className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl object-cover flex-shrink-0" />
+          )}
+          <button type="button" onClick={() => logoRef.current?.click()} className="text-xs sm:text-sm text-brand hover:underline">
+            Changer le logo
+          </button>
+          <input ref={logoRef} type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+        </div>
+
+        <div>
+          <label className="block text-xs sm:text-sm font-medium mb-1">Nom du club</label>
+          <input value={settings.name || ''} onChange={e => setSettings({...settings, name: e.target.value})} className="input-field text-sm" />
+        </div>
+        <div>
+          <label className="block text-xs sm:text-sm font-medium mb-1">Description</label>
+          <textarea value={settings.description || ''} onChange={e => setSettings({...settings, description: e.target.value})} className="input-field text-sm resize-none" rows={3} />
+        </div>
+        <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
+          <div>
+            <label className="block text-xs sm:text-sm font-medium mb-1">Email de contact</label>
+            <input value={settings.contactEmail || ''} onChange={e => setSettings({...settings, contactEmail: e.target.value})} className="input-field text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs sm:text-sm font-medium mb-1">Téléphone</label>
+            <input value={settings.contactPhone || ''} onChange={e => setSettings({...settings, contactPhone: e.target.value})} className="input-field text-sm" />
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs sm:text-sm font-medium mb-1">Adresse</label>
+          <input value={settings.address || ''} onChange={e => setSettings({...settings, address: e.target.value})} className="input-field text-sm" />
+        </div>
+
+        <div className="flex items-center justify-between py-3 border-b border-gray-100">
+          <div>
+            <p className="text-sm font-medium">Agenda public</p>
+            <p className="text-xs text-text-muted">Les visiteurs non-membres peuvent voir l'agenda</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSettings({...settings, publicAgenda: !settings.publicAgenda})}
+            className={`relative w-11 h-6 rounded-full transition-colors ${
+              settings.publicAgenda ? 'bg-brand' : 'bg-gray-300'
+            }`}
+          >
+            <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform shadow ${
+              settings.publicAgenda ? 'translate-x-5' : ''
+            }`} />
+          </button>
+        </div>
+
+        {/* Rappels d'événements */}
+        <div className="py-3 border-b border-gray-100 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="pr-3">
+              <p className="text-sm font-medium">Rappels d'événements par email</p>
+              <p className="text-xs text-text-muted">Relance automatique aux membres qui n'ont pas répondu</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSettings({...settings, eventRemindersEnabled: !settings.eventRemindersEnabled})}
+              className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
+                settings.eventRemindersEnabled ? 'bg-brand' : 'bg-gray-300'
+              }`}
+              aria-label="Activer les rappels"
+            >
+              <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform shadow ${
+                settings.eventRemindersEnabled ? 'translate-x-5' : ''
+              }`} />
+            </button>
+          </div>
+
+          {settings.eventRemindersEnabled && (
+            <div className="space-y-3 pl-2 border-l-2 border-brand-light">
+              <div>
+                <label className="block text-xs sm:text-sm font-medium mb-1.5">
+                  Envoyer les rappels à J-… (en jours avant l'événement)
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {[15, 10, 7, 5, 3, 2, 1].map(d => {
+                    const active = (settings.reminderDaysBefore || []).includes(d);
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => {
+                          const current = settings.reminderDaysBefore || [];
+                          const next = active ? current.filter(x => x !== d) : [...current, d];
+                          setSettings({...settings, reminderDaysBefore: next.sort((a,b) => b-a)});
+                        }}
+                        className={`px-3 py-1.5 rounded-full text-xs sm:text-sm transition-colors ${
+                          active ? 'bg-brand text-white' : 'bg-white text-text-muted border border-gray-200'
+                        }`}
+                      >
+                        J-{d}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-text-muted mt-1">
+                  Par défaut : J-10 et J-5. Chaque membre ne reçoit qu'un rappel par déclencheur.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs sm:text-sm font-medium mb-1">
+                  Message personnalisé (optionnel)
+                </label>
+                <textarea
+                  value={settings.reminderMessage || ''}
+                  onChange={e => setSettings({...settings, reminderMessage: e.target.value})}
+                  className="input-field text-sm resize-none"
+                  rows={3}
+                  maxLength={1000}
+                  placeholder="Ajout d'un mot du président, d'une précision sur l'événement…"
+                />
+                <p className="text-[11px] text-text-muted mt-1">
+                  Le texte "Pense à dire si tu participes ou si tu ne participes pas" est déjà
+                  inclus automatiquement dans l'email.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {msg && <p className="text-sm text-green-600">{msg}</p>}
+        <button type="submit" className="btn-primary text-sm w-full sm:w-auto" disabled={saving}>
+          {saving ? 'Sauvegarde...' : 'Enregistrer'}
+        </button>
+      </form>
+
+      {/* Test reminder email */}
+      <form onSubmit={handleSendTest} className="card p-3 sm:p-5 space-y-3 sm:space-y-4">
+        <div>
+          <h3 className="font-semibold text-sm sm:text-base">Tester l'email de rappel</h3>
+          <p className="text-xs sm:text-sm text-text-muted mt-0.5">
+            Envoie un email de démonstration à l'adresse de ton choix, sans impact sur les vrais rappels ni sur les autres membres.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+          <div>
+            <label className="block text-xs sm:text-sm font-medium mb-1">Email destinataire</label>
+            <input
+              type="email"
+              value={testEmail}
+              onChange={e => setTestEmail(e.target.value)}
+              className="input-field text-sm"
+              placeholder="ton.email@exemple.fr"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-xs sm:text-sm font-medium mb-1">Simuler</label>
+            <select
+              value={testDaysBefore}
+              onChange={e => setTestDaysBefore(parseInt(e.target.value, 10))}
+              className="input-field text-sm"
+            >
+              <option value={10}>J-10</option>
+              <option value={5}>J-5</option>
+              <option value={2}>J-2</option>
+              <option value={1}>J-1</option>
+            </select>
+          </div>
+        </div>
+        {testMsg && (
+          <p className={`text-sm ${testMsg.includes('Erreur') || testMsg.includes('erreur') ? 'text-red-500' : 'text-green-600'}`}>
+            {testMsg}
+          </p>
+        )}
+        <button type="submit" className="btn-primary text-sm w-full sm:w-auto" disabled={testSending}>
+          {testSending ? 'Envoi...' : 'Envoyer l\'email de test'}
+        </button>
+      </form>
+
+      {/* Email personnalisé à une liste d'adresses */}
+      <form onSubmit={handleSendCustomEmail} className="card p-3 sm:p-5 space-y-3 sm:space-y-4">
+        <div>
+          <h3 className="font-semibold text-sm sm:text-base">Envoyer un email à des adresses personnalisées</h3>
+          <p className="text-xs sm:text-sm text-text-muted mt-0.5">
+            Pour inviter des personnes extérieures au club, leur envoyer une info, etc.
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs sm:text-sm font-medium mb-1">Adresses email (une par ligne, ou séparées par des virgules)</label>
+          <textarea
+            value={customEmails}
+            onChange={e => setCustomEmails(e.target.value)}
+            className="input-field text-sm resize-none font-mono"
+            rows={3}
+            placeholder={"jean@exemple.fr\npierre@exemple.fr\nmarie@exemple.fr"}
+            required
+          />
+        </div>
+        <div>
+          <label className="block text-xs sm:text-sm font-medium mb-1">Sujet</label>
+          <input
+            value={customSubject}
+            onChange={e => setCustomSubject(e.target.value)}
+            className="input-field text-sm"
+            placeholder="Invitation au Velay Semène Business Club"
+            required
+          />
+        </div>
+        <div>
+          <label className="block text-xs sm:text-sm font-medium mb-1">Message</label>
+          <textarea
+            value={customMessage}
+            onChange={e => setCustomMessage(e.target.value)}
+            className="input-field text-sm resize-none"
+            rows={5}
+            placeholder="Bonjour, je vous invite à découvrir le Velay Semène Business Club..."
+            required
+          />
+        </div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={customJoinLink}
+            onChange={e => setCustomJoinLink(e.target.checked)}
+            className="w-4 h-4 rounded border-gray-300 text-brand focus:ring-brand"
+          />
+          <span className="text-xs sm:text-sm">Inclure un bouton "Rejoindre le Velay Semène Business Club" dans l'email</span>
+        </label>
+        {customMsg && (
+          <p className={`text-sm ${customMsg.toLowerCase().includes('erreur') ? 'text-red-500' : 'text-green-600'}`}>
+            {customMsg}
+          </p>
+        )}
+        <button type="submit" className="btn-primary text-sm w-full sm:w-auto flex items-center justify-center gap-2" disabled={customSending}>
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+          </svg>
+          {customSending ? 'Envoi en cours...' : 'Envoyer'}
+        </button>
+      </form>
+
+      {/* Email notification section */}
+      <form onSubmit={handleSendEmail} className="card p-3 sm:p-5 space-y-3 sm:space-y-4">
+        <h3 className="font-semibold text-sm sm:text-base">Envoyer un email à tous les membres</h3>
+        <p className="text-xs sm:text-sm text-text-muted">L'email sera envoyé à tous les membres actifs du club (hors visiteurs).</p>
+        <div>
+          <label className="block text-xs sm:text-sm font-medium mb-1">Sujet</label>
+          <input
+            value={emailSubject}
+            onChange={e => setEmailSubject(e.target.value)}
+            className="input-field text-sm"
+            placeholder="Objet de l'email"
+            required
+          />
+        </div>
+        <div>
+          <label className="block text-xs sm:text-sm font-medium mb-1">Message</label>
+          <textarea
+            value={emailMessage}
+            onChange={e => setEmailMessage(e.target.value)}
+            className="input-field text-sm resize-none"
+            rows={4}
+            placeholder="Contenu de l'email..."
+            required
+          />
+        </div>
+        {emailMsg && (
+          <p className={`text-sm ${emailMsg.includes('Erreur') ? 'text-red-500' : 'text-green-600'}`}>
+            {emailMsg}
+          </p>
+        )}
+        <button type="submit" className="btn-primary text-sm w-full sm:w-auto flex items-center justify-center gap-2" disabled={emailSending}>
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+          </svg>
+          {emailSending ? 'Envoi en cours...' : 'Envoyer à tous'}
+        </button>
+      </form>
+
+      <PushAdmin settings={settings} setSettings={setSettings} />
+    </div>
+  );
+}
+
+function PushAdmin({ settings, setSettings }) {
+  const [stats, setStats] = useState(null);
+  const [showList, setShowList] = useState(false);
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [url, setUrl] = useState('');
+  const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [testMsg, setTestMsg] = useState('');
+  const [savingToggle, setSavingToggle] = useState(false);
+
+  const loadStats = () => api.getAdminPushStats().then(setStats).catch(() => setStats({ enabled: false, devices: 0, members: 0, eligibleMembers: 0, subscribers: [] }));
+  useEffect(() => { loadStats(); }, []);
+
+  const toggle = async (key) => {
+    const next = { ...settings, [key]: !settings[key] };
+    setSettings(next);
+    setSavingToggle(true);
+    try { await api.updateSettings({ [key]: next[key] }); }
+    catch { setSettings(settings); }
+    setSavingToggle(false);
+  };
+
+  const handleSend = async (e) => {
+    e.preventDefault();
+    if (!confirm(`Envoyer cette notification à ${stats?.devices ?? 0} appareil(s) ?`)) return;
+    setMsg('');
+    setSending(true);
+    try {
+      const res = await api.adminPushSend({ title, body, url: url || '/' });
+      setMsg(res.message || `Envoyée à ${res.sent} appareil(s).`);
+      setTitle(''); setBody(''); setUrl('');
+      loadStats();
+    } catch (err) {
+      setMsg(`Erreur : ${err.message}`);
+    }
+    setSending(false);
+  };
+
+  const handleTest = async () => {
+    setTestMsg('');
+    try {
+      const r = await api.pushTest();
+      setTestMsg(r.sent ? `Notification de test envoyée à ${r.sent} de vos appareils.` : "Aucun de vos appareils n'est abonné : activez les notifications depuis l'accueil sur votre téléphone.");
+    } catch (err) {
+      setTestMsg(`Erreur : ${err.message}`);
+    }
+  };
+
+  const Toggle = ({ on, onClick, label }) => (
+    <button type="button" onClick={onClick} disabled={savingToggle} aria-label={label}
+      className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${on ? 'bg-brand' : 'bg-gray-300'}`}>
+      <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform shadow ${on ? 'translate-x-5' : ''}`} />
+    </button>
+  );
+
+  return (
+    <div className="card p-3 sm:p-5 space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="font-semibold text-sm sm:text-base">Notifications push</h3>
+          <p className="text-xs sm:text-sm text-text-muted">Notifications sur le téléphone des membres qui les ont activées depuis l'accueil.</p>
+        </div>
+        {stats && (
+          <span className={`text-xs px-2 py-1 rounded-full whitespace-nowrap ${stats.enabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+            {stats.enabled ? 'Actif' : 'Non configuré'}
+          </span>
+        )}
+      </div>
+
+      {stats && (
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="bg-brand-light/60 rounded-xl p-2.5">
+            <p className="text-xl font-bold text-brand">{stats.members}</p>
+            <p className="text-[11px] text-text-muted leading-tight">membre{stats.members > 1 ? 's' : ''} abonné{stats.members > 1 ? 's' : ''}</p>
+          </div>
+          <div className="bg-brand-light/60 rounded-xl p-2.5">
+            <p className="text-xl font-bold text-brand">{stats.devices}</p>
+            <p className="text-[11px] text-text-muted leading-tight">appareil{stats.devices > 1 ? 's' : ''}</p>
+          </div>
+          <div className="bg-brand-light/60 rounded-xl p-2.5">
+            <p className="text-xl font-bold text-brand">{stats.eligibleMembers ? Math.round(100 * stats.members / stats.eligibleMembers) : 0}%</p>
+            <p className="text-[11px] text-text-muted leading-tight">des membres actifs</p>
+          </div>
+        </div>
+      )}
+
+      {stats?.subscribers?.length > 0 && (
+        <div>
+          <button type="button" onClick={() => setShowList(v => !v)} className="text-xs text-brand hover:underline">
+            {showList ? 'Masquer la liste' : 'Voir qui est abonné'}
+          </button>
+          <Collapse open={showList}>
+            <ul className="mt-2 flex flex-wrap gap-1.5">
+              {stats.subscribers.map(s => (
+                <li key={s.userId} className="text-xs bg-gray-50 border border-gray-100 rounded-full px-2.5 py-1">
+                  {s.name}{s.devices > 1 ? ` · ${s.devices} appareils` : ''}
+                </li>
+              ))}
+            </ul>
+          </Collapse>
+        </div>
+      )}
+
+      {/* Envois automatiques */}
+      <div className="border-t border-gray-100 pt-3 space-y-3">
+        <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">Envois automatiques</p>
+        <div className="flex items-center justify-between gap-3">
+          <div className="pr-2">
+            <p className="text-sm font-medium">Rappels d'événements</p>
+            <p className="text-xs text-text-muted">Mêmes déclencheurs (J-…) que les rappels par email, aux membres qui n'ont pas répondu</p>
+          </div>
+          <Toggle on={settings.pushRemindersEnabled !== false} onClick={() => toggle('pushRemindersEnabled')} label="Rappels push" />
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <div className="pr-2">
+            <p className="text-sm font-medium">Nouvel événement</p>
+            <p className="text-xs text-text-muted">Quand vous créez un événement dans l'agenda</p>
+          </div>
+          <Toggle on={settings.pushNewEventEnabled !== false} onClick={() => toggle('pushNewEventEnabled')} label="Push nouvel événement" />
+        </div>
+        <p className="text-xs text-text-muted">« Envoyer un email à tous les membres » ci-dessus envoie aussi la notification correspondante.</p>
+      </div>
+
+      {/* Envoi manuel */}
+      <form onSubmit={handleSend} className="border-t border-gray-100 pt-3 space-y-3">
+        <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">Envoyer une notification maintenant</p>
+        <div>
+          <label className="block text-xs sm:text-sm font-medium mb-1">Titre</label>
+          <input value={title} onChange={e => setTitle(e.target.value)} className="input-field text-sm" placeholder="Ex : Rappel matinale vendredi" maxLength={80} required />
+        </div>
+        <div>
+          <label className="block text-xs sm:text-sm font-medium mb-1">Message</label>
+          <textarea value={body} onChange={e => setBody(e.target.value)} className="input-field text-sm resize-none" rows={2} placeholder="Court : c'est une notification, pas un email" maxLength={200} required />
+          <p className="text-[11px] text-text-muted mt-1 text-right">{body.length}/200</p>
+        </div>
+        <div>
+          <label className="block text-xs sm:text-sm font-medium mb-1">Page à ouvrir au tap (optionnel)</label>
+          <input value={url} onChange={e => setUrl(e.target.value)} className="input-field text-sm" placeholder="/agenda ou /agenda/id-de-l-evenement" />
+        </div>
+        {msg && <p className={`text-sm ${msg.startsWith('Erreur') ? 'text-red-500' : 'text-green-600'}`}>{msg}</p>}
+        <div className="flex flex-col sm:flex-row gap-2">
+          <button type="submit" className="btn-primary text-sm flex items-center justify-center gap-2" disabled={sending || !stats?.enabled}>
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+            </svg>
+            {sending ? 'Envoi…' : `Envoyer à ${stats?.devices ?? 0} appareil(s)`}
+          </button>
+          <button type="button" onClick={handleTest} className="btn-secondary text-sm py-2">M'envoyer un test</button>
+        </div>
+        {testMsg && <p className={`text-sm ${testMsg.startsWith('Erreur') ? 'text-red-500' : 'text-text-muted'}`}>{testMsg}</p>}
+      </form>
+    </div>
+  );
+}

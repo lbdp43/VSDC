@@ -1,0 +1,125 @@
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { api } from '../utils/api';
+import { useAuth } from '../hooks/useAuth';
+
+const slides = [
+  {
+    title: 'Bienvenue au Club',
+    desc: 'Le Velay Semène Business Club réunit des professionnels du Velay Semène pour échanger, s\'entraider et développer leur activité.',
+    color: 'bg-brand-light'
+  },
+  {
+    title: 'Annuaire des membres',
+    desc: 'Consultez les fiches des membres, trouvez des compétences, contactez-les directement par téléphone, email ou WhatsApp.',
+    color: 'bg-sand'
+  },
+  {
+    title: 'Agenda partagé',
+    desc: 'Retrouvez toutes les matinales, afterworks et événements du club. Exportez-les vers votre agenda.',
+    color: 'bg-brand-light'
+  },
+  {
+    title: 'Échanges et demandes',
+    desc: 'Publiez sur le fil d\'actualité, postez vos demandes et besoins. La communauté est là pour vous aider.',
+    color: 'bg-sand'
+  }
+];
+
+export default function Onboarding() {
+  const [current, setCurrent] = useState(0);
+  const [gdprAccepted, setGdprAccepted] = useState(false);
+  const [finishing, setFinishing] = useState(false);
+  const [error, setError] = useState('');
+  const navigate = useNavigate();
+  const { refreshUser } = useAuth();
+
+  const handleFinish = async () => {
+    if (!gdprAccepted || finishing) return;
+    setFinishing(true);
+    setError('');
+    try {
+      await api.completeOnboarding(true);
+      await refreshUser();
+      navigate('/profil', { replace: true });
+    } catch (err) {
+      setError(err.message || 'Une erreur est survenue. Réessayez.');
+      setFinishing(false);
+    }
+  };
+
+  const slide = slides[current];
+  const isLast = current === slides.length - 1;
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
+      <div className="max-w-md w-full card p-6 sm:p-8 fade-in" key={current}>
+        <div className={`${slide.color} rounded-card p-8 sm:p-12 mb-6 sm:mb-8 text-center`}>
+          <div className="w-20 h-20 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
+            <span className="text-3xl font-display text-brand font-bold">{current + 1}</span>
+          </div>
+        </div>
+
+        <h2 className="text-2xl font-display text-brand-dark text-center mb-3">{slide.title}</h2>
+        <p className="text-text-muted text-center mb-8">{slide.desc}</p>
+
+        <div className="flex justify-center gap-2 mb-8">
+          {slides.map((_, i) => (
+            <div
+              key={i}
+              className={`w-2 h-2 rounded-full transition-colors ${
+                i === current ? 'bg-brand' : 'bg-gray-300'
+              }`}
+            />
+          ))}
+        </div>
+
+        {/* Case RGPD sur le dernier slide */}
+        {isLast && (
+          <div className="bg-white border border-gray-200 rounded-xl p-4 mb-6">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={gdprAccepted}
+                onChange={(e) => setGdprAccepted(e.target.checked)}
+                className="mt-1 w-5 h-5 rounded border-gray-300 text-brand focus:ring-brand flex-shrink-0"
+              />
+              <span className="text-sm text-text-muted leading-relaxed">
+                J'accepte que mes données personnelles (nom, coordonnées, informations professionnelles) soient traitées par le Velay Semène Business Club et partagées avec les autres membres dans le cadre de l'annuaire du club. Ces données sont utilisées uniquement pour faciliter les échanges entre membres. Conformément au RGPD et à la loi Informatique et Libertés, je dispose d'un droit d'accès, de rectification et de suppression de mes données en contactant l'administrateur du club.
+              </span>
+            </label>
+          </div>
+        )}
+
+        <div className="flex gap-3">
+          {current > 0 && (
+            <button onClick={() => setCurrent(c => c - 1)} className="btn-secondary flex-1">
+              Précédent
+            </button>
+          )}
+          {isLast ? (
+            <button
+              onClick={handleFinish}
+              disabled={!gdprAccepted || finishing}
+              className={`btn-primary flex-1 ${!gdprAccepted || finishing ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              {finishing ? 'Un instant...' : 'Commencer'}
+            </button>
+          ) : (
+            <button onClick={() => setCurrent(c => c + 1)} className="btn-primary flex-1">
+              Suivant
+            </button>
+          )}
+        </div>
+
+        {error && <p className="text-red-500 text-sm text-center mt-4">{error}</p>}
+
+        {!isLast && (
+          <button onClick={() => setCurrent(slides.length - 1)} className="block mx-auto mt-4 text-sm text-text-muted hover:text-brand">
+            Passer l'introduction
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
